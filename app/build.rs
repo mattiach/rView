@@ -16,6 +16,8 @@ fn main() {
         .set_manifest(&manifest.to_string())
         .set("ProductName", "rView")
         .set("FileDescription", "rView")
+        .set("CompanyName", "mattiach")
+        .set("LegalCopyright", "© mattiach")
         .compile()
         .expect("embed resources");
     println!("cargo:rerun-if-changed=build.rs");
