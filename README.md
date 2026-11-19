@@ -12,6 +12,8 @@ rView opens an image, lets you move through its folder with the arrow keys and s
 (Ctrl+Shift+A) adds crop, adjustments, shapes, text and redactions without touching the original file: the
 edits stay editable, and you save them as an `.rvm` project or export a new image.
 
+![rView showing a photo with its right-click menu open](preview/renders/wide/01-viewer.png)
+
 ## Install
 
 - **Installer** (`rview-<version>-setup-x64.exe`): installs for the current user, no administrator rights
@@ -44,6 +46,8 @@ Windows 10 1809 or later, but those versions are not tested.
 The interface is in English. Translations are Fluent files in [`assets/i18n`](assets/i18n): adding a
 `<language>.ftl` file is enough, no code change needed.
 
+![File Info panel with general details of a JPEG, each with a copy button](preview/renders/wide/05-file-info.png)
+
 ## Formats
 
 | Decoded by rView                                                                                                                       | Through the Windows codecs                                                                   |
@@ -56,6 +60,8 @@ are shown as SDR.
 
 ## Markup
 
+![Markup toolbar with a loupe placed on a photo](preview/renders/wide/02-markup.png)
+
 - **Crop**: free, original, 1:1, 4:3, 3:2, 16:9, social media presets (Instagram, Facebook, X, YouTube,
   LinkedIn) or a custom ratio. Also rotate and flip.
 - **Adjust**: exposure, brightness, contrast, saturation, temperature, hue, sharpness.
@@ -67,6 +73,8 @@ are shown as SDR.
 - **Compare** (`\`): a draggable divider between the original and the edited image.
 - Every object can be selected and changed later. Undo and redo cover every step.
 
+![Adjust panel next to the before / after divider](preview/renders/wide/03-adjust.png)
+
 When you are done:
 
 - **Save Project** writes an `.rvm` file you can open again and keep editing.
@@ -74,6 +82,8 @@ When you are done:
   the metadata, remove the location or remove all of it. Embedded thumbnails are never copied.
 - **Overwrite Original** replaces the file and puts a backup of the original in the Recycle Bin.
 - **Copy** puts the result on the clipboard.
+
+![Crop tool with the social media preset list open](preview/renders/wide/04-crop.png)
 
 > [!IMPORTANT]
 > Only **Solid** redaction hides data. Blur and Pixelate are visual effects and may be reversible.

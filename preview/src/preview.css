@@ -1,0 +1,215 @@
+/* One page per feature, rendered at two sizes: the wide layout (1920x1080) and,
+   through the media query at the end, the square one (1200x1200). */
+@font-face {
+  font-family: "Lato";
+  src: url("../../assets/fonts/Lato-Regular.ttf");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Lato";
+  src: url("../../assets/fonts/Lato-Bold.ttf");
+  font-weight: 700;
+}
+
+:root {
+  --ground: #0e0f12;
+  --panel: #1a1c21;
+  --line: rgb(255 255 255 / 0.09);
+  --text: #f2f3f5;
+  --muted: #9a9fa8;
+  --accent: #1a7dff;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 48px;
+  width: 100vw;
+  height: 100vh;
+  padding: 56px 72px 72px;
+  overflow: hidden;
+  font-family: "Lato", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(45% 60% at 30% 58%, rgb(26 125 255 / 0.22), transparent 70%),
+    radial-gradient(circle, rgb(255 255 255 / 0.06) 1px, transparent 1.5px) 0 0 / 28px 28px,
+    var(--ground);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 28px;
+  font-weight: 700;
+}
+.brand img {
+  width: 44px;
+  height: 44px;
+}
+.brand small {
+  padding-left: 14px;
+  margin-left: 2px;
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--muted);
+  border-left: 1px solid var(--line);
+}
+
+/* Which of the five pages this is: one bar per page, the current one lit. */
+.steps {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+.steps i {
+  width: 28px;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+}
+.steps i.on {
+  background: var(--accent);
+}
+.steps span {
+  margin-left: 10px;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 560px;
+  gap: 80px;
+  align-items: center;
+  min-height: 0;
+}
+
+/* The screenshot is shown whole unless the page crops it, for the maximised
+   captures with wide empty margins: --ratio and --focus pick the area, --trim
+   cuts that fraction of the height off the top (the title and menu bars). */
+.shot {
+  justify-self: center;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: var(--ratio, auto);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 10px rgb(255 255 255 / 0.03),
+    0 50px 100px -30px rgb(0 0 0 / 0.8);
+}
+.shot.crop {
+  height: 100%;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: calc(100% / (1 - var(--trim, 0)));
+  object-fit: cover;
+  object-position: var(--focus, center);
+  translate: 0 calc(var(--trim, 0) * -100%);
+}
+
+.tag {
+  display: inline-block;
+  padding: 7px 16px;
+  margin-bottom: 26px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  background: rgb(26 125 255 / 0.12);
+  border: 1px solid rgb(26 125 255 / 0.35);
+  border-radius: 99px;
+}
+
+h1 {
+  margin-bottom: 24px;
+  font-size: 60px;
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  font-size: 23px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* Shortcut rows: a key on the left, what it does on the right. */
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px 20px;
+  align-items: center;
+  padding-top: 32px;
+  margin-top: 36px;
+  font-size: 19px;
+  border-top: 1px solid var(--line);
+}
+dt {
+  display: flex;
+  gap: 6px;
+}
+kbd {
+  min-width: 38px;
+  padding: 6px 11px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-bottom-width: 3px;
+  border-radius: 8px;
+}
+dd {
+  color: var(--muted);
+}
+
+/* Square: screenshot on top, copy below, shortcuts dropped for room. */
+@media (aspect-ratio < 1.2) {
+  body {
+    padding: 48px 64px 60px;
+    background:
+      radial-gradient(70% 45% at 50% 32%, rgb(26 125 255 / 0.22), transparent 70%),
+      radial-gradient(circle, rgb(255 255 255 / 0.06) 1px, transparent 1.5px) 0 0 / 28px 28px,
+      var(--ground);
+  }
+  main {
+    grid-template-rows: 1fr auto;
+    grid-template-columns: 1fr;
+    gap: 44px;
+  }
+  .tag {
+    margin-bottom: 20px;
+  }
+  h1 {
+    margin-bottom: 16px;
+    font-size: 50px;
+  }
+  .sub {
+    font-size: 22px;
+  }
+  dl {
+    display: none;
+  }
+}
