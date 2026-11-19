@@ -1,0 +1,7 @@
+# Pinned toolchain (rustc 1.97.1), so CI clippy/fmt results match local builds.
+# Read by rustup (CI); a standalone Rust install ignores it.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]
+profile = "minimal"

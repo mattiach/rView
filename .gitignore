@@ -1,0 +1,36 @@
+
+# Rust build artifacts
+/target/
+
+# Rust backup files
+**/*.rs.bk
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.log
+
+# Test assets: never committed. The fixture tests print SKIPPED without them;
+# core/tests/fixtures/README.md says how to get them back (fetch_fixtures.py + gen_fixtures.py).
+/core/tests/fixtures/*
+!/core/tests/fixtures/README.md
+!/core/tests/fixtures/fetch_fixtures.py
+!/core/tests/fixtures/gen_fixtures.py
+# outputs of test/CI runs and manual captures
+test-output.txt
+/screenshots/

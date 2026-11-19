@@ -1,0 +1,27 @@
+[workspace]
+members = ["core", "app"]
+resolver = "3"
+
+[workspace.package]
+version = "1.2.7"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mattiach/rview"
+publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# Fuzzing (pure-Rust fuzzer in core/examples): optimised, but panics unwind (they are
+# caught and reported) and integer overflows panic.
+[profile.fuzz]
+inherits = "release"
+panic = "unwind"
+overflow-checks = true
+debug-assertions = true

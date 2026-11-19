@@ -1,0 +1,161 @@
+[package]
+name = "rview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rv-core = { path = "../core" }
+# default_fonts: egui 0.37 ships no font unless asked (otherwise every UI text renders as □)
+egui = { version = "0.37.0", features = ["default_fonts"] }
+egui-winit = { version = "0.37.0", default-features = false, features = ["clipboard", "links", "accesskit"] }
+egui-wgpu = { version = "0.37.0", default-features = false, features = ["winit"] }
+wgpu = { version = "30.0.2", default-features = false, features = ["dx12", "wgsl"] }
+winit = "0.30.13"
+muda = "0.21.2"
+rfd = "0.18.0"
+pollster = "1.0.1"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4.35"
+env_logger = "0.11.11"
+anyhow = "1.0.104"
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Time",
+  "Win32_UI_Controls",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+# Recycle Bin with restore; the UI thread and its workers are STA
+trash = { version = "5.3.0", default-features = false, features = ["coinit_apartmentthreaded"] }
+# Open URL: Windows TLS (SChannel) and the system proxy, no C code
+ureq = { version = "3.5.2", default-features = false, features = ["native-tls-no-default", "win-system-proxy"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# UI strings: Fluent files in assets/i18n, English = source and fallback
+fluent-bundle = "0.16.0"
+fluent-langneg = "0.13.1"
+unic-langid = "0.9.6"
+# update check: the GitHub release JSON
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[features]
+default = ["update-check"]
+# check GitHub releases at start (at most every 4 h, only with updatenotifications)
+update-check = []
+
+[build-dependencies]
+embed-manifest = "1.5.1"
+winresource = "0.1.34"
+
+[dev-dependencies]
+fluent-syntax = "0.12.0"
+# features/crates needed by the shared test helpers in core/tests/common (already built for core)
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
+gif = "0.14.2"
+winit = "0.30.13"
+windows = { version = "0.62.2", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_StationsAndDesktops"] }
+# native E2E (tests/uia_native.rs): patterns only, no input injection ("input" is needed by the
+# crate's core module to compile, the test never calls it)
+uiautomation = { version = "0.25.1", default-features = false, features = ["input", "pattern", "control"] }
+
+[[test]]
+name = "e2e_open"
+harness = false
+
+[[test]]
+name = "e2e_error"
+harness = false
+
+[[test]]
+name = "e2e_navigate"
+harness = false
+
+[[bench]]
+name = "upload_mip"
+harness = false
+
+[[test]]
+name = "e2e_nav_perf"
+harness = false
+
+[[test]]
+name = "e2e_anim"
+harness = false
+
+[[test]]
+name = "e2e_color"
+harness = false
+
+[[test]]
+name = "e2e_windows"
+harness = false
+
+[[test]]
+name = "e2e_slideshow"
+harness = false
+
+[[test]]
+name = "e2e_geometry"
+harness = false
+
+[[test]]
+name = "e2e_input"
+harness = false
+
+[[test]]
+name = "e2e_tiling"
+harness = false
+
+[[test]]
+name = "e2e_hold_perf"
+harness = false
+
+[[test]]
+name = "e2e_fileops"
+harness = false
+
+[[test]]
+name = "e2e_settings"
+harness = false
+
+[[test]]
+name = "e2e_firstrun"
+harness = false
+
+[[test]]
+name = "e2e_markup"
+harness = false
+
+[[test]]
+name = "e2e_export"
+harness = false
+
+[[test]]
+name = "e2e_redact"
+harness = false
+
+[[test]]
+name = "e2e_svg"
+harness = false
+
+[[test]]
+name = "e2e_lifecycle"
+harness = false
+
+[[test]]
+name = "uia_native"
+harness = false

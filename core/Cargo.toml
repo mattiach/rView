@@ -1,0 +1,63 @@
+[package]
+name = "rv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rv_core"
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "pnm", "qoi", "hdr", "exr", "dds"] }
+qcms = "0.3.0"
+resvg = { version = "0.50.0", default-features = false, features = ["svgz", "text", "system-fonts", "memmap-fonts", "raster-images"] }
+jxl-oxide = "0.12.6"
+icns = "0.5.0"
+kamadak-exif = "0.6.2"
+thiserror = "2.0.21"
+log = "0.4.35"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+toml = "1.2.1"
+tiff = "0.11.3"
+# Markup geometry and rasterisation: paths, stroker, AA fill; same code for preview and export
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
+# EXIF/ICC chunks in exported JPEG/PNG/WebP, the .rvm project container
+img-parts = "0.4.2"
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
+serde_json = "1"
+# text: shaping, line breaking, fallback; glyph outlines with skrifa (no fontconfig: Linux only)
+cosmic-text = { version = "0.19.0", default-features = false, features = ["std"] }
+skrifa = "0.40.0"
+# redactions in parallel
+rayon = "1.12.0"
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_Graphics_Imaging",
+  "Win32_UI_Shell",
+  "Win32_Globalization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_SystemInformation",
+] }
+
+[dev-dependencies]
+trash = "5.3.0"
+png = "0.18.1"
+gif = "0.14.2"
+windows = { version = "0.62.2", features = [
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com_StructuredStorage",
+] }
+
+[[bench]]
+name = "decode"
+harness = false
+
+[[bench]]
+name = "markup"
+harness = false
