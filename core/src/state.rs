@@ -28,6 +28,9 @@ pub const MAX_RECENTS: usize = 10;
 /// Colors kept in the Color Picker's history.
 pub const MAX_COLORS: usize = 10;
 
+/// Images kept in Markup's recent watermarks.
+pub const MAX_WATERMARKS: usize = 2;
+
 /// Version of the settings/state format written by this build.
 pub const CONFIG_VERSION: u32 = 1;
 
@@ -53,6 +56,9 @@ pub struct State {
     /// Color Picker history (sRGB), most recent first.
     #[serde(rename = "recentcolors")]
     pub recent_colors: Vec<[u8; 3]>,
+    /// Markup's last inserted watermarks (paths only: a moved file shows as unavailable).
+    #[serde(rename = "recentwatermarks")]
+    pub recent_watermarks: Vec<PathBuf>,
 }
 
 impl Default for State {
@@ -66,6 +72,7 @@ impl Default for State {
             last_file_dialog_dir: None,
             shortcuts: Default::default(),
             recent_colors: Vec::new(),
+            recent_watermarks: Vec::new(),
         }
     }
 }
@@ -104,6 +111,27 @@ impl State {
         self.recent_colors.insert(0, rgb);
         self.recent_colors.truncate(MAX_COLORS);
         true
+    }
+
+    /// `path` becomes the first recent watermark (moved up if already there), at most
+    /// MAX_WATERMARKS. Returns true if the list changed.
+    pub fn add_watermark(&mut self, path: &Path) -> bool {
+        let same = |p: &PathBuf| crate::folder::same_path_ordinal(p, path);
+        if self.recent_watermarks.first().is_some_and(same) {
+            return false;
+        }
+        self.recent_watermarks.retain(|p| !same(p));
+        self.recent_watermarks.insert(0, path.to_path_buf());
+        self.recent_watermarks.truncate(MAX_WATERMARKS);
+        true
+    }
+
+    /// Drop `path` from the recent watermarks. Returns true if the list changed.
+    pub fn forget_watermark(&mut self, path: &Path) -> bool {
+        let n = self.recent_watermarks.len();
+        self.recent_watermarks
+            .retain(|p| !crate::folder::same_path_ordinal(p, path));
+        self.recent_watermarks.len() != n
     }
 
     /// Entries whose file no longer exists are dropped. Returns true if the list changed.
@@ -188,6 +216,7 @@ mod tests {
             last_file_dialog_dir: Some(PathBuf::from(r"C:\Foto")),
             shortcuts: [("nextfile".to_string(), vec!["Space".to_string()])].into(),
             recent_colors: vec![[10, 132, 255], [0, 0, 0]],
+            recent_watermarks: vec![PathBuf::from(r"C:\Loghi\firma.png")],
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), s);
@@ -239,5 +268,26 @@ mod tests {
         assert!(s.recents.iter().all(|r| r.name != "f11.png"));
         assert!(!s.prune_recents());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recent_watermarks_keep_two() {
+        let mut s = State::default();
+        assert!(s.add_watermark(Path::new(r"C:\a.png")));
+        assert!(s.add_watermark(Path::new(r"C:\b.png")));
+        assert!(
+            !s.add_watermark(Path::new(r"C:\B.PNG")),
+            "already first (same file, other case)"
+        );
+        assert!(s.add_watermark(Path::new(r"C:\c.png")));
+        assert_eq!(
+            s.recent_watermarks,
+            [PathBuf::from(r"C:\c.png"), PathBuf::from(r"C:\b.png")]
+        );
+        assert!(s.add_watermark(Path::new(r"C:\b.png")), "moved up");
+        assert_eq!(s.recent_watermarks[0], PathBuf::from(r"C:\b.png"));
+        assert!(s.forget_watermark(Path::new(r"C:\C.png")));
+        assert!(!s.forget_watermark(Path::new(r"C:\c.png")));
+        assert_eq!(s.recent_watermarks, [PathBuf::from(r"C:\b.png")]);
     }
 }

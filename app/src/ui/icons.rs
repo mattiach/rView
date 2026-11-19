@@ -25,6 +25,12 @@ pub enum Icon {
     Copy,
     /// Two columns of dots: the universal "drag here" handle.
     Grip,
+    /// Three sliders: image adjustments.
+    Adjust,
+    /// A framed picture: insert an image (watermark).
+    Image,
+    /// A frame split in two, one half filled: before/after.
+    Compare,
 }
 
 /// Icon-only button (28×26 pt), highlighted while `selected`.
@@ -188,6 +194,28 @@ pub fn paint(p: &egui::Painter, r: Rect, icon: Icon, color: Color32) {
                 for y in [0.15, 0.5, 0.85] {
                     p.circle_filled(at((x, y)), 1.6, color);
                 }
+            }
+        }
+        Image => {
+            p.rect_stroke(
+                egui::Rect::from_min_max(at((0.0, 0.1)), at((1.0, 0.9))),
+                1.5,
+                s,
+                egui::StrokeKind::Inside,
+            );
+            line(&[(0.08, 0.8), (0.4, 0.42), (0.62, 0.66), (0.75, 0.52), (0.92, 0.8)]);
+            p.circle_filled(at((0.72, 0.3)), 1.8, color);
+        }
+        Compare => {
+            let frame = egui::Rect::from_min_max(at((0.0, 0.1)), at((1.0, 0.9)));
+            p.rect_filled(egui::Rect::from_min_max(frame.min, at((0.5, 0.9))), 0.0, color);
+            p.rect_stroke(frame, 1.5, s, egui::StrokeKind::Inside);
+            line(&[(0.5, 0.0), (0.5, 1.0)]);
+        }
+        Adjust => {
+            for (y, knob) in [(0.15, 0.3), (0.5, 0.72), (0.85, 0.45)] {
+                line(&[(0.0, y), (1.0, y)]);
+                p.circle_filled(at((knob, y)), 2.6, color);
             }
         }
     }

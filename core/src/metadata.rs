@@ -37,6 +37,9 @@ const IDENTIFYING: &[Tag] = &[
     Tag::UserComment,
 ];
 
+/// Replaced when the export sets a resolution.
+const RESOLUTION: &[Tag] = &[Tag::XResolution, Tag::YResolution, Tag::ResolutionUnit];
+
 /// Rewritten here, never copied.
 const REWRITTEN: &[Tag] = &[
     Tag::Orientation,
@@ -47,17 +50,21 @@ const REWRITTEN: &[Tag] = &[
 
 /// The EXIF block (TIFF structure, as `image` returns it and img-parts inserts it) for an export of
 /// `w`×`h` pixels, or None (strip-all, no source EXIF, or a source EXIF that can't be parsed).
-pub fn export_exif(source: Option<&[u8]>, preset: MetadataPreset, w: u32, h: u32) -> Option<Vec<u8>> {
+/// `dpi` replaces the resolution tags, and gives a block of its own when the source has none.
+pub fn export_exif(source: Option<&[u8]>, preset: MetadataPreset, w: u32, h: u32, dpi: Option<u32>) -> Option<Vec<u8>> {
     if preset == MetadataPreset::StripAll {
         return None;
     }
-    let parsed = match exif::Reader::new().read_raw(source?.to_vec()) {
-        Ok(p) => p,
+    let parsed = source.and_then(|s| match exif::Reader::new().read_raw(s.to_vec()) {
+        Ok(p) => Some(p),
         Err(e) => {
             log::warn!("source EXIF not readable, not exported: {e}");
-            return None;
+            None
         }
-    };
+    });
+    if parsed.is_none() && dpi.is_none() {
+        return None;
+    }
     let keep = |f: &Field| {
         f.ifd_num == In::PRIMARY
             && !REWRITTEN.contains(&f.tag)
@@ -67,8 +74,14 @@ pub fn export_exif(source: Option<&[u8]>, preset: MetadataPreset, w: u32, h: u32
                 _ => true, // Exif, Interop
             }
             && !(preset == MetadataPreset::StripLocation && IDENTIFYING.contains(&f.tag))
+            && !(dpi.is_some() && RESOLUTION.contains(&f.tag))
     };
-    let mut fields: Vec<Field> = parsed.fields().filter(|f| keep(f)).cloned().collect();
+    let mut fields: Vec<Field> = parsed
+        .iter()
+        .flat_map(|p| p.fields())
+        .filter(|f| keep(f))
+        .cloned()
+        .collect();
     let primary = |tag, value| Field {
         tag,
         ifd_num: In::PRIMARY,
@@ -77,12 +90,18 @@ pub fn export_exif(source: Option<&[u8]>, preset: MetadataPreset, w: u32, h: u32
     fields.push(primary(Tag::Orientation, Value::Short(vec![1])));
     fields.push(primary(Tag::PixelXDimension, Value::Long(vec![w])));
     fields.push(primary(Tag::PixelYDimension, Value::Long(vec![h])));
+    if let Some(d) = dpi {
+        fields.push(primary(Tag::XResolution, Value::Rational(vec![(d, 1).into()])));
+        fields.push(primary(Tag::YResolution, Value::Rational(vec![(d, 1).into()])));
+        // 2 = inches
+        fields.push(primary(Tag::ResolutionUnit, Value::Short(vec![2])));
+    }
     let mut wr = exif::experimental::Writer::new();
     for f in &fields {
         wr.push_field(f);
     }
     let mut out = std::io::Cursor::new(Vec::new());
-    match wr.write(&mut out, parsed.little_endian()) {
+    match wr.write(&mut out, parsed.as_ref().is_some_and(|p| p.little_endian())) {
         Ok(()) => Some(out.into_inner()),
         Err(e) => {
             log::warn!("EXIF not written: {e}");
@@ -130,10 +149,10 @@ mod tests {
     fn presets() {
         let src = source();
         assert!(tags(&src).iter().any(|t| t.1 == In::THUMBNAIL), "fixture has IFD1");
-        assert!(export_exif(Some(&src), MetadataPreset::StripAll, 10, 20).is_none());
-        assert!(export_exif(None, MetadataPreset::Keep, 10, 20).is_none());
+        assert!(export_exif(Some(&src), MetadataPreset::StripAll, 10, 20, None).is_none());
+        assert!(export_exif(None, MetadataPreset::Keep, 10, 20, None).is_none());
 
-        let keep = export_exif(Some(&src), MetadataPreset::Keep, 10, 20).unwrap();
+        let keep = export_exif(Some(&src), MetadataPreset::Keep, 10, 20, None).unwrap();
         let e = exif::Reader::new().read_raw(keep.clone()).unwrap();
         let uint = |t| e.get_field(t, In::PRIMARY).and_then(|f| f.value.get_uint(0));
         assert_eq!(uint(Tag::Orientation), Some(1));
@@ -156,7 +175,7 @@ mod tests {
             assert!(t.iter().any(|x| x.0 == kept), "{kept} lost with keep");
         }
 
-        let loc = tags(&export_exif(Some(&src), MetadataPreset::StripLocation, 10, 20).unwrap());
+        let loc = tags(&export_exif(Some(&src), MetadataPreset::StripLocation, 10, 20, None).unwrap());
         for gone in [
             Tag::GPSLatitude,
             Tag::GPSLatitudeRef,
@@ -166,5 +185,63 @@ mod tests {
             assert!(!loc.iter().any(|x| x.0 == gone), "{gone} kept by strip-location");
         }
         assert!(loc.iter().any(|x| x.0 == Tag::Make) && loc.iter().any(|x| x.0 == Tag::ExposureTime));
+    }
+
+    fn resolution(b: &[u8]) -> (Option<u32>, Option<u32>, Option<u32>) {
+        let e = exif::Reader::new().read_raw(b.to_vec()).unwrap();
+        let rat = |t| {
+            e.get_field(t, In::PRIMARY).and_then(|f| match &f.value {
+                Value::Rational(v) => v.first().map(|r| r.num / r.denom),
+                _ => None,
+            })
+        };
+        let unit = e
+            .get_field(Tag::ResolutionUnit, In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0));
+        (rat(Tag::XResolution), rat(Tag::YResolution), unit)
+    }
+
+    #[test]
+    fn dpi_replaces_the_resolution() {
+        let f = |tag, value| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value,
+        };
+        let mut w = exif::experimental::Writer::new();
+        let fields = [
+            f(Tag::Make, Value::Ascii(vec![b"Cam".to_vec()])),
+            f(Tag::XResolution, Value::Rational(vec![(72, 1).into()])),
+            f(Tag::YResolution, Value::Rational(vec![(72, 1).into()])),
+            f(Tag::ResolutionUnit, Value::Short(vec![2])),
+        ];
+        for x in &fields {
+            w.push_field(x);
+        }
+        let mut src = std::io::Cursor::new(Vec::new());
+        w.write(&mut src, true).unwrap();
+        let src = src.into_inner();
+
+        // no DPI: the source's resolution is copied
+        let kept = export_exif(Some(&src), MetadataPreset::Keep, 10, 20, None).unwrap();
+        assert_eq!(resolution(&kept), (Some(72), Some(72), Some(2)));
+        for preset in [MetadataPreset::Keep, MetadataPreset::StripLocation] {
+            let out = export_exif(Some(&src), preset, 10, 20, Some(300)).unwrap();
+            assert_eq!(resolution(&out), (Some(300), Some(300), Some(2)), "{preset:?}");
+            let t = tags(&out);
+            assert_eq!(
+                t.iter().filter(|x| x.0 == Tag::XResolution).count(),
+                1,
+                "one XResolution"
+            );
+            assert!(t.iter().any(|x| x.0 == Tag::Make), "other tags kept");
+        }
+        // no source EXIF: a block with only the layout and the resolution
+        let own = export_exif(None, MetadataPreset::Keep, 10, 20, Some(150)).unwrap();
+        assert_eq!(resolution(&own), (Some(150), Some(150), Some(2)));
+        assert!(!tags(&own).iter().any(|x| x.0 == Tag::Make));
+        // strip-all writes no EXIF at all
+        assert!(export_exif(Some(&src), MetadataPreset::StripAll, 10, 20, Some(300)).is_none());
+        assert!(export_exif(None, MetadataPreset::StripAll, 10, 20, Some(300)).is_none());
     }
 }

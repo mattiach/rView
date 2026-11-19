@@ -274,3 +274,42 @@ fn every_seed_case_is_rejected_without_panic() {
         assert_eq!(r.ok(), Some(name == "valid"), "{name}");
     }
 }
+
+#[test]
+fn adjustments_round_trip_as_version_2() {
+    let png = tiny_png(W, H);
+    let plain = sample_doc(W, H);
+    let p = read(&project::write(&plain, &png, "photo.png", rv_core::formats::Format::Png).unwrap()).unwrap();
+    assert_eq!(p.manifest.version, 1, "no adjustments: older versions still open it");
+    let mut adjusted = plain.clone();
+    adjusted.adjust = Adjustments {
+        exposure: 0.5,
+        contrast: -20.0,
+        hue: 30.0,
+        ..Default::default()
+    };
+    let doc = plain.apply(&Edit::SetAdjust(adjusted.adjust)).unwrap();
+    let p = read(&project::write(&doc, &png, "photo.png", rv_core::formats::Format::Png).unwrap()).unwrap();
+    assert_eq!(p.manifest.version, 2);
+    assert_eq!(p.doc.adjust, doc.adjust);
+    // the reopened project renders the same adjusted image
+    let src = |b: &[u8]| {
+        let img = rv_core::decode::decode(b, None, &DecodeOptions::default()).unwrap();
+        DocSource::new(img, Arc::from(b.to_vec()))
+    };
+    let a = rv_core::color::rgba8(flatten(&doc, &src(&png)).pixels);
+    assert_eq!(a, rv_core::color::rgba8(flatten(&p.doc, &src(&p.original)).pixels));
+    assert_ne!(
+        a,
+        rv_core::color::rgba8(flatten(&plain, &src(&png)).pixels),
+        "the adjustments change the render"
+    );
+    corrupt("bad_adjust", "adjustments");
+    assert_eq!(
+        plain.apply(&Edit::SetAdjust(Adjustments {
+            exposure: 9.0,
+            ..Default::default()
+        })),
+        Err(EditError::OutOfRange)
+    );
+}

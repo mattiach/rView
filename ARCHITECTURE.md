@@ -44,16 +44,45 @@ Two crates, pure Rust (no C/C++ in the build graph: `cargo tree -i cc --workspac
   Pixelate is a grid anchored at the area's corner; Solid replaces every pixel the area touches, even partly
   (binary conservative mask, alpha 255, applied after overlapping Blur/Pixelate). Only Solid hides data; Blur
   and Pixelate are visual effects, not a protection.
+- **Adjustments** (`adjust.rs`): exposure, brightness, contrast, saturation, temperature, hue and sharpness, applied to
+  the source below the redactions (which read the adjusted pixels) and the shapes (never adjusted). Per channel
+  one lookup table, then one 3×3 colour matrix, on the encoded values of the document space at its bit depth;
+  exposure and temperature decode with the sRGB curve (exact for sRGB, an approximation for other profiles).
+  Sharpness is last: an unsharp mask of the luma (Gaussian σ = 1 px) added to the three channels, on the full
+  image, so the crop's edges and the redactions see the same pixels in the preview and the export.
+  `DocSource::base` keeps the last two adjusted images for the preview, the patches and the export; the patch
+  keys include the adjustments. The preview is computed on a worker, one job at a time, and the texture is
+  rewritten when it is ready; the patches and loupes read the adjustments on screen meanwhile.
+- **Image shapes** (`picture.rs`): a watermark is a shape (`Geom::Image`): selection, handles, z-order,
+  opacity, undo and the renderer are the shapes'. Inserted files are decoded with the normal limits, converted
+  to sRGB and reduced to 2048 px; the pixels travel with the shape (`ImageRef`), only their ID (a stable hash
+  of their PNG) goes into `document.json`. Drawn through `ColorMap` like shape colours (document space for the
+  export, view space for the preview), from a mipmap chain kept per colour space (converted once, halved
+  2×2 on premultiplied values; the smallest level at least the size drawn), so a resize drag finds it ready. The last two watermarks are paths in `state.toml`; their existence is checked off the UI thread.
+- **Before/after** (`window.rs`): a view mode, not an edit. The window draws the document right of the divider
+  and the original left of it (two scissor rectangles, same transform: same crop and orientation). The
+  original is the image texture itself while nothing on it differs (no adjustments, no redactions: the
+  shapes are left out); otherwise a second texture, prepared on a worker and freed when the comparison ends.
 - **Text** (`text.rs`): cosmic-text shaping and wrapping, skrifa glyph outlines; Lato embedded, installed fonts
   loaded in the background on first use.
 - **`.rvm` projects** (`core/src/project.rs`): a ZIP with `manifest.json` (`"format": "rview-markup"`),
   `document.json` and the original file's exact bytes. Read entirely in memory as untrusted input: sizes and
   ratios checked while reading, local headers compared with the central directory, every value validated; any
-  violation is an error, never a partial load or a panic. Fuzzed by `core/examples/fuzz_project.rs`.
+  violation is an error, never a partial load or a panic. Fuzzed by `core/examples/fuzz_project.rs`. Version 2
+  adds the adjustments and image shapes (one `image-<id>.png` entry per distinct image, its content checked
+  against its name, every one used by a shape); a project without them is written as version 1, so older versions still open it, and
+  they refuse a version 2 one (`TooNew`) instead of dropping its adjustments.
 - **Writes** (`core/src/atomic.rs`): encode in memory, write a hidden temp file in the destination folder,
   verify it, then rename. Overwrite Original uses `ReplaceFileW`; the backup goes to the Recycle Bin and can be
   restored. Exports never copy the source's metadata segments: EXIF is rebuilt per preset (keep, strip location,
-  strip all), previews are always stripped.
+  strip all), previews are always stripped. A resolution chosen at export goes into the format's own field
+  (JFIF density, PNG `pHYs`, TIFF tags, BMP header) and the EXIF, so it survives strip-all except in WebP
+  (EXIF only); the pixels are resampled only when a size is chosen (pixels, percentage, or a print size
+  at that resolution). Resizing (`core/src/resample.rs`) is the first step of `encode`, on the final render:
+  separable Lanczos-3, widened when shrinking, on premultiplied values so transparent pixels don't tint the
+  edges, at the source's bit depth; the EXIF dimensions and the verification use the new size. Transparency is flattened on the background in encoded
+  values of the document space (always for JPEG, on request for the other formats). Convert encodes the
+  decoded file directly (`Flat::of`), without a document render.
 
 ## Tests
 
@@ -84,6 +113,9 @@ Two crates, pure Rust (no C/C++ in the build graph: `cargo tree -i cc --workspac
 - **image-webp 0.2.4** composites some animated WebP frames off by 1 (upstream).
 - **WARP** (no GPU, e.g. virtual machines): rendering is slow, so the animation cadence check prints `SKIPPED`.
 - **Open URL**: at most 1 GiB, held in memory; proxy authentication is not supported.
+- **Base64** (`core/src/dataurl.rs`): at most 256 MiB decoded or encoded; only Base64 data URLs (not
+  percent-encoded ones such as `data:image/svg+xml,<svg…>`). The content decides the format, the media type
+  is a hint; pasted text without `data:` opens only if it starts like a known image format.
 - **Recycle Bin and long paths**: a file whose full path has 260 characters or more is not moved to the bin
   (Windows 11 25H2 would delete it for good while reporting success); Delete explains it, Delete
   Permanently still works, and an Overwrite Original backup stays next to the file.

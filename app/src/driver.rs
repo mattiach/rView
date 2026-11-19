@@ -95,6 +95,10 @@ pub struct MarkupObs {
     pub source: Option<rv_core::export::DocSource>,
     /// Where Save Project writes.
     pub project_path: Option<PathBuf>,
+    /// The watermark menu's recent images and whether each file is there.
+    pub watermarks: Vec<(PathBuf, bool)>,
+    /// Before/after: the divider's place, None = off.
+    pub compare: Option<f32>,
     /// The current state was exported (Export / Overwrite Original).
     pub exported: bool,
 }

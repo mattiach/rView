@@ -61,6 +61,8 @@ pub enum Outcome {
     Export(rv_core::export::ExportOptions),
     /// Save this frame (0-based) of the animation with these options (the file name is next).
     ExportFrame(rv_core::export::ExportOptions, usize),
+    /// Convert the file on screen with these options (the file name is next).
+    Convert(rv_core::export::ExportOptions),
     Closed,
 }
 
@@ -90,9 +92,10 @@ impl Dialog {
             Dialog::Rename(r) => Outcome::Rename(r.path.clone(), r.text.trim().to_string()),
             Dialog::OpenUrl(o) => Outcome::OpenUrl(o.text.trim().to_string()),
             Dialog::Download(_) => Outcome::CancelDownload,
-            Dialog::Export(e) => match e.frame {
-                Some(n) => Outcome::ExportFrame(e.opts, n),
-                None => Outcome::Export(e.opts),
+            Dialog::Export(e) => match e.target {
+                export::Target::Frame(n) => Outcome::ExportFrame(e.opts, n),
+                export::Target::File => Outcome::Convert(e.opts),
+                export::Target::Document => Outcome::Export(e.opts),
             },
         }
     }
@@ -111,8 +114,11 @@ impl Dialog {
             Dialog::Rename(_) => ("rename", t("rename-title")),
             Dialog::OpenUrl(_) => ("openurl", t("openurl-title")),
             Dialog::Download(_) => ("download", t("download-title")),
-            Dialog::Export(e) if e.frame.is_some() => ("export", t("title-saveframe")),
-            Dialog::Export(_) => ("export", t("export-title")),
+            Dialog::Export(e) => match e.target {
+                export::Target::Frame(_) => ("export", t("title-saveframe")),
+                export::Target::File => ("export", t("convert-title")),
+                export::Target::Document => ("export", t("export-title")),
+            },
         };
         let mut done = None;
         let r = egui::Modal::new(egui::Id::unique(id)).show(ctx, |ui| {

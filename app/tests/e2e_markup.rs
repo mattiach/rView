@@ -343,6 +343,32 @@ fn main() {
         );
         expect((out.0, out.1) == (80, 100), "render size after crop + rotate", o)
     }));
+    // a social preset and a custom ratio, as seen on the turned document
+    steps.push(Step::Key("C".into()));
+    steps.push(Step::WaitIdle);
+    steps.push(Step::MarkupButton("crop-aspect:markup-crop-instagram-portrait"));
+    // the ratio applies inside the current frame (100×80 is already 4:5 turned); Reset: the whole image
+    steps.push(Step::MarkupButton("crop-reset"));
+    steps.push(Step::Key("Enter".into()));
+    steps.push(Step::WaitIdle);
+    steps.push(check(|o| {
+        let m = o.markup.as_ref().unwrap();
+        let c = m.doc.crop.ok_or("no crop")?;
+        expect(
+            m.tool == "select" && (c.w, c.h) == (200, 160) && m.doc.canvas_size() == (160, 200),
+            "Instagram portrait: 4:5 on screen, as large as it fits",
+            o,
+        )
+    }));
+    steps.push(Step::Key("C".into()));
+    steps.push(Step::WaitIdle);
+    steps.push(Step::MarkupButton("crop-ratio:2:1"));
+    steps.push(Step::Key("Enter".into()));
+    steps.push(Step::WaitIdle);
+    steps.push(check(|o| {
+        let m = o.markup.as_ref().unwrap();
+        expect(m.doc.canvas_size() == (160, 80), "custom 2:1 on screen", o)
+    }));
     // Del deletes the selected shape, never the file
     steps.push(Step::Key("Tab".into()));
     steps.push(Step::Key("Del".into()));

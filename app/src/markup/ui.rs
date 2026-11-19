@@ -20,6 +20,8 @@ fn to_pos(t: &Affine, ppp: f32, p: PointF) -> Pos2 {
 /// Draw the UI; Some(out) when Done, Save or Export was pressed.
 pub fn show(ctx: &egui::Context, m: &mut Markup, t: &Affine, ppp: f32, scale: f32) -> Option<Out> {
     paint_frames(ctx, m, t, ppp, scale);
+    m.sync_compare();
+    compare_divider(ctx, m, t, ppp);
     let mut out = None;
     toolbar(ctx, m, &mut out);
     inspector(ctx, m);
@@ -62,6 +64,7 @@ fn toolbar(ctx: &egui::Context, m: &mut Markup, out: &mut Option<Out>) {
                         (Tool::Text, Icon::Text, "markup-tool-text", "T"),
                         (Tool::Draw(ShapeKind::Loupe), Icon::Loupe, "markup-tool-loupe", ""),
                         (Tool::Redact, Icon::Blur, "markup-tool-redact", "B"),
+                        (Tool::Adjust, Icon::Adjust, "markup-tool-adjust", ""),
                     ] {
                         let tip = if key.is_empty() {
                             t(id)
@@ -72,6 +75,16 @@ fn toolbar(ctx: &egui::Context, m: &mut Markup, out: &mut Option<Out>) {
                             m.set_tool(tool);
                         }
                     }
+                    // off until the document has something to compare
+                    let tip = format!("{} (\\)", t("markup-compare"));
+                    let r = ui.add_enabled_ui(m.has_edits(), |ui| {
+                        icons::button(ui, Icon::Compare, m.compare.is_some(), tip)
+                            .on_disabled_hover_text(t("markup-compare-nothing"))
+                    });
+                    if r.inner.clicked() {
+                        m.button("compare");
+                    }
+                    watermark_menu(ui, m, out);
                     ui.separator();
                     for (name, icon, id) in [
                         ("rotate-left", Icon::RotateLeft, "markup-rotate-left"),
@@ -105,6 +118,125 @@ fn toolbar(ctx: &egui::Context, m: &mut Markup, out: &mut Option<Out>) {
                 });
             });
         });
+}
+
+/// Before/after: the divider over the visible image, dragged sideways, with the two labels
+/// beside its handle (the middle of the visible image).
+fn compare_divider(ctx: &egui::Context, m: &mut Markup, tr: &Affine, ppp: f32) {
+    let Some(f) = m.compare else { return };
+    let doc = m.doc();
+    let r = m.view_region().unwrap_or(RectU {
+        x: 0,
+        y: 0,
+        w: doc.image_size.w,
+        h: doc.image_size.h,
+    });
+    let a = to_pos(
+        tr,
+        ppp,
+        PointF {
+            x: r.x as f32,
+            y: r.y as f32,
+        },
+    );
+    let b = to_pos(
+        tr,
+        ppp,
+        PointF {
+            x: (r.x + r.w) as f32,
+            y: (r.y + r.h) as f32,
+        },
+    );
+    let area = egui::Rect::from_two_pos(a, b).intersect(ctx.content_rect());
+    if area.width() < 2.0 || area.height() < 2.0 {
+        return;
+    }
+    let x = area.left() + f * area.width();
+    let id = egui::Id::unique("compare divider");
+    egui::Area::new(id)
+        .fixed_pos(egui::pos2(x - 8.0, area.top()))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            let (_, resp) = ui.allocate_exact_size(egui::vec2(16.0, area.height()), egui::Sense::drag());
+            if resp.hovered() || resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if resp.dragged()
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                m.compare = Some(((p.x - area.left()) / area.width()).clamp(0.0, 1.0));
+            }
+        });
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, id.with("paint")));
+    let (top, bottom) = (egui::pos2(x, area.top()), egui::pos2(x, area.bottom()));
+    p.line_segment([top, bottom], Stroke::new(3.0, Color32::from_black_alpha(90)));
+    p.line_segment([top, bottom], Stroke::new(1.5, Color32::WHITE));
+    let mid = egui::pos2(x, area.center().y);
+    p.circle_filled(mid, 11.0, Color32::WHITE);
+    p.circle_stroke(mid, 11.0, Stroke::new(1.0, Color32::from_black_alpha(90)));
+    for d in [-1.0f32, 1.0] {
+        let tip = mid + egui::vec2(8.0 * d, 0.0);
+        let back = mid + egui::vec2(3.0 * d, 0.0);
+        p.add(egui::Shape::convex_polygon(
+            vec![tip, back + egui::vec2(0.0, -4.0), back + egui::vec2(0.0, 4.0)],
+            Color32::from_gray(60),
+            Stroke::NONE,
+        ));
+    }
+    let label = |text: String, at: Pos2, align: egui::Align2| {
+        let font = egui::FontId::proportional(12.0);
+        let g = p.layout_no_wrap(text, font, Color32::WHITE);
+        let rect = align.anchor_size(at, g.size()).expand2(egui::vec2(6.0, 3.0));
+        p.rect_filled(rect, 4.0, Color32::from_black_alpha(150));
+        p.galley(rect.min + egui::vec2(6.0, 3.0), g, Color32::WHITE);
+    };
+    // beside the handle, in the middle of the image: clear of the toolbar and the Inspector
+    if x - area.left() > 80.0 {
+        label(
+            t("markup-compare-before"),
+            egui::pos2(x - 22.0, mid.y),
+            egui::Align2::RIGHT_CENTER,
+        );
+    }
+    if area.right() - x > 80.0 {
+        label(
+            t("markup-compare-after"),
+            egui::pos2(x + 22.0, mid.y),
+            egui::Align2::LEFT_CENTER,
+        );
+    }
+}
+
+/// The watermark button: the recent watermarks (a missing file is greyed out), Choose, Clear.
+fn watermark_menu(ui: &mut egui::Ui, m: &mut Markup, out: &mut Option<Out>) {
+    use super::WatermarkReq;
+    let button = crate::ui::icons::button(ui, crate::ui::icons::Icon::Image, false, t("markup-watermark"));
+    egui::Popup::menu(&button).show(|ui| {
+        ui.set_min_width(220.0);
+        if m.watermarks.is_empty() {
+            ui.label(egui::RichText::new(t("markup-watermark-none")).weak());
+        }
+        for (path, there) in m.watermarks.clone() {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let r = ui
+                .add_enabled(there, egui::Button::new(name))
+                .on_hover_text(path.display().to_string())
+                .on_disabled_hover_text(tf("markup-watermark-missing", &[("path", &path.display().to_string())]));
+            if r.clicked() {
+                *out = Some(Out::Watermark(WatermarkReq::Open(path)));
+            }
+        }
+        ui.separator();
+        if ui.button(t("markup-watermark-choose")).clicked() {
+            *out = Some(Out::Watermark(WatermarkReq::Choose));
+        }
+        if !m.watermarks.is_empty() && ui.button(t("markup-watermark-clear")).clicked() {
+            *out = Some(Out::Watermark(WatermarkReq::Clear));
+        }
+    });
 }
 
 /// The handle at the left end of the toolbar: dragging it moves the bar, kept on screen.
@@ -159,6 +291,10 @@ fn inspector(ctx: &egui::Context, m: &mut Markup) {
             }
             if m.tool == Tool::Crop {
                 crop_panel(ui, m);
+                return;
+            }
+            if m.tool == Tool::Adjust {
+                adjust_panel(ui, m);
                 return;
             }
             let doc = m.doc().clone();
@@ -250,6 +386,7 @@ fn kind_id(k: ShapeKind) -> &'static str {
         ShapeKind::Highlight => "markup-kind-highlight",
         ShapeKind::Text => "markup-kind-text",
         ShapeKind::Loupe => "markup-kind-loupe",
+        ShapeKind::Image => "markup-kind-image",
     }
 }
 
@@ -298,6 +435,8 @@ fn style_editor(ui: &mut egui::Ui, m: &mut Markup, st: &Style, geom: Option<&Geo
         _ => None,
     });
     let is_text = kind == Some(ShapeKind::Text);
+    // an image: its opacity only
+    let is_image = kind == Some(ShapeKind::Image);
     // lines and loupes: an outline only
     let line_like = matches!(
         kind,
@@ -308,21 +447,23 @@ fn style_editor(ui: &mut egui::Ui, m: &mut Markup, st: &Style, geom: Option<&Geo
         .num_columns(2)
         .spacing([10.0, 6.0])
         .show(ui, |ui| {
-            ui.label(t(if is_text { "markup-text-colour" } else { "markup-stroke" }));
-            ui.horizontal(|ui| {
-                let mut on = next.stroke.is_some();
-                if !line_like && !is_text && ui.checkbox(&mut on, "").changed() {
-                    next.stroke = on.then_some(st.stroke.unwrap_or(Color::rgb(0xE5, 0x39, 0x35)));
-                }
-                if let Some(c) = next.stroke {
-                    let mut rgb = [c.r, c.g, c.b];
-                    if crate::ui::color::edit_button(ui, &mut rgb).changed() {
-                        next.stroke = Some(Color::rgb(rgb[0], rgb[1], rgb[2]));
+            if !is_image {
+                ui.label(t(if is_text { "markup-text-colour" } else { "markup-stroke" }));
+                ui.horizontal(|ui| {
+                    let mut on = next.stroke.is_some();
+                    if !line_like && !is_text && ui.checkbox(&mut on, "").changed() {
+                        next.stroke = on.then_some(st.stroke.unwrap_or(Color::rgb(0xE5, 0x39, 0x35)));
                     }
-                }
-            });
-            ui.end_row();
-            if !line_like {
+                    if let Some(c) = next.stroke {
+                        let mut rgb = [c.r, c.g, c.b];
+                        if crate::ui::color::edit_button(ui, &mut rgb).changed() {
+                            next.stroke = Some(Color::rgb(rgb[0], rgb[1], rgb[2]));
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+            if !line_like && !is_image {
                 ui.label(t(if is_text {
                     "markup-text-background"
                 } else {
@@ -342,7 +483,7 @@ fn style_editor(ui: &mut egui::Ui, m: &mut Markup, st: &Style, geom: Option<&Geo
                 });
                 ui.end_row();
             }
-            if !is_text {
+            if !is_text && !is_image {
                 ui.label(t("markup-width"));
                 ui.add(egui::Slider::new(&mut next.width, 1.0..=40.0).suffix(" px"));
                 ui.end_row();
@@ -567,29 +708,107 @@ fn font_editor(ui: &mut egui::Ui, m: &mut Markup, font: &FontSpec, align: TextAl
     }
 }
 
+/// The image adjustments: one slider per parameter (one history entry while it is held), Reset.
+fn adjust_panel(ui: &mut egui::Ui, m: &mut Markup) {
+    use rv_core::edit::adjust::Param;
+    title(ui, &t("markup-tool-adjust"));
+    let mut a = m.doc().adjust;
+    egui::Grid::new("adjust grid")
+        .num_columns(2)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            for p in Param::ALL.iter().copied() {
+                ui.label(t(match p {
+                    Param::Exposure => "markup-adjust-exposure",
+                    Param::Brightness => "markup-adjust-brightness",
+                    Param::Contrast => "markup-adjust-contrast",
+                    Param::Saturation => "markup-adjust-saturation",
+                    Param::Temperature => "markup-adjust-temperature",
+                    Param::Hue => "markup-adjust-hue",
+                    Param::Sharpness => "markup-adjust-sharpness",
+                }));
+                let (lo, hi) = p.range();
+                let mut v = a.get(p);
+                let slider = egui::Slider::new(&mut v, lo..=hi).clamping(egui::SliderClamping::Always);
+                let slider = match p {
+                    Param::Exposure => slider.suffix(" EV").fixed_decimals(2).step_by(0.05),
+                    Param::Hue => slider.suffix("°").fixed_decimals(0).step_by(1.0),
+                    _ => slider.fixed_decimals(0).step_by(1.0),
+                };
+                let r = ui.add(slider);
+                // a double click puts this parameter back to neutral
+                if r.double_clicked() {
+                    v = 0.0;
+                }
+                if v != a.get(p) {
+                    a.set(p, v);
+                }
+                ui.end_row();
+            }
+        });
+    if a != m.doc().adjust {
+        start_gesture(m);
+        m.set_adjust(a);
+    }
+    ui.add_space(4.0);
+    if ui
+        .add_enabled(
+            !m.doc().adjust.is_neutral(),
+            egui::Button::new(t("markup-adjust-reset")),
+        )
+        .clicked()
+    {
+        m.button("adjust-reset");
+    }
+    note(ui, "markup-adjust-note");
+}
+
 fn crop_panel(ui: &mut egui::Ui, m: &mut Markup) {
     let doc = m.doc().clone();
     let Some(c) = &mut m.crop else { return };
     title(ui, &t("markup-tool-crop"));
-    let current = crop::PRESETS
-        .iter()
-        .find(|(_, a)| *a == c.aspect)
-        .map(|(id, _)| t(id))
-        .unwrap_or_default();
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("crop aspect")
-            .selected_text(current)
+            .selected_text(t(c.preset))
+            .height(f32::INFINITY)
             .show_ui(ui, |ui| {
-                for (id, a) in crop::PRESETS {
-                    if ui.selectable_label(c.aspect == *a, t(id)).clicked() {
-                        c.set_aspect(&doc, *a);
+                let mut list = |ui: &mut egui::Ui, presets: &[(&'static str, crop::Aspect)]| {
+                    for (id, _) in presets {
+                        if ui.selectable_label(c.preset == *id, t(id)).clicked() {
+                            c.pick(&doc, id);
+                        }
                     }
+                };
+                list(ui, crop::PRESETS);
+                ui.separator();
+                ui.label(egui::RichText::new(t("markup-crop-social")).small().weak());
+                list(ui, crop::SOCIAL);
+                ui.separator();
+                if ui.selectable_label(c.preset == crop::CUSTOM, t(crop::CUSTOM)).clicked() {
+                    let (w, h) = match c.aspect {
+                        crop::Aspect::Ratio(w, h) => (w, h),
+                        _ => (3, 2),
+                    };
+                    c.set_custom(&doc, w, h);
                 }
             });
         if ui.button(t("markup-crop-swap")).on_hover_text("X").clicked() {
             c.invert(&doc);
         }
     });
+    if c.preset == crop::CUSTOM
+        && let crop::Aspect::Ratio(mut w, mut h) = c.aspect
+    {
+        ui.horizontal(|ui| {
+            let range = 1..=crop::CUSTOM_MAX;
+            let a = ui.add(egui::DragValue::new(&mut w).range(range.clone()));
+            ui.label(":");
+            let b = ui.add(egui::DragValue::new(&mut h).range(range));
+            if a.changed() || b.changed() {
+                c.set_custom(&doc, w, h);
+            }
+        });
+    }
     let shown = doc.orient.apply_size(c.rect.w.round() as u32, c.rect.h.round() as u32);
     ui.label(tf(
         "markup-crop-size",
