@@ -194,11 +194,37 @@ fn apng_frames() {
 }
 
 #[test]
-fn save_frame_as_png() {
-    let png = rv_core::anim::frame_png(&gif(Repeat::Infinite), Format::Gif, 1).unwrap();
+fn save_frame_as_png_and_jpeg() {
+    use rv_core::export::{ExportFormat, ExportOptions, verify};
+    let opts = |format| ExportOptions {
+        format,
+        jpeg_quality: 95,
+        background: [255, 255, 255],
+        preset: rv_core::settings::MetadataPreset::Keep,
+    };
+    let bytes = gif(Repeat::Infinite);
+    let (png, w, h) = rv_core::anim::export_frame(&bytes, Format::Gif, 1, &opts(ExportFormat::Png)).unwrap();
+    assert!(verify(&png, ExportFormat::Png, w, h));
     let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
         .unwrap()
         .into_rgba8();
     assert_eq!(img.dimensions(), (8, 8));
     assert_eq!((img.get_pixel(0, 0).0, img.get_pixel(6, 6).0), (RED, BLUE));
+    let (jpg, w, h) = rv_core::anim::export_frame(&bytes, Format::Gif, 1, &opts(ExportFormat::Jpeg)).unwrap();
+    assert!(verify(&jpg, ExportFormat::Jpeg, w, h), "the chosen format is used");
+}
+
+#[test]
+fn previous_frame_steps_back_and_wraps() {
+    let t0 = Instant::now();
+    let mut p = player(gif(Repeat::Infinite), Format::Gif, t0, None);
+    let n = wait_complete(&mut p);
+    assert!(n >= 2);
+    assert_eq!(p.index(), 0);
+    p.previous_frame(t0).unwrap();
+    assert_eq!(p.index(), n - 1, "from the first frame to the last");
+    p.previous_frame(t0).unwrap();
+    assert_eq!(p.index(), n - 2);
+    p.next_frame(t0).unwrap();
+    assert_eq!(p.index(), n - 1);
 }

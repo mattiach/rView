@@ -55,34 +55,42 @@ const VIEW: &[Entry] = &[
     A(Action::RotateRight), A(Action::RotateLeft), Sep, A(Action::Mirror), A(Action::Flip), Sep,
     A(Action::FullScreen),
 ];
+/// Commands for animated images (GIF, APNG, animated WebP/JXL), grouped so their purpose shows.
 #[rustfmt::skip]
+const ANIMATION: &[Entry] = &[
+    A(Action::Pause), A(Action::PreviousFrame), A(Action::NextFrame), A(Action::SaveFrameAs), Sep,
+    A(Action::DecreaseSpeed), A(Action::ResetSpeed), A(Action::IncreaseSpeed),
+];
 const TOOLS: &[Entry] = &[
-    A(Action::SaveFrameAs), A(Action::Pause), A(Action::NextFrame), Sep,
-    A(Action::DecreaseSpeed), A(Action::ResetSpeed), A(Action::IncreaseSpeed), Sep,
-    A(Action::Slideshow), A(Action::Options),
+    Sub("menu-animation", ANIMATION),
+    A(Action::Slideshow),
+    Sep,
+    A(Action::ColorPicker),
 ];
 const HELP: &[Entry] = &[A(Action::Welcome)];
 
 #[rustfmt::skip]
-const BAR: &[(&str, &[Entry])] = &[
-    ("menu-file", &[
+/// The menu bar: submenus, and Settings as a command of its own.
+const BAR: &[Entry] = &[
+    Sub("menu-file", &[
         A(Action::Open), A(Action::OpenUrl), RECENT, A(Action::ReloadFile), Sep,
         OPEN_WITH, A(Action::OpenContainingFolder), A(Action::ShowFileInfo), Sep, A(Action::CloseWindow), A(Action::Quit),
     ]),
-    ("menu-edit", &[
+    Sub("menu-edit", &[
         A(Action::Undo), A(Action::Redo), Sep, A(Action::Copy), A(Action::Paste), A(Action::Rename), Sep,
         A(Action::Delete), A(Action::DeletePermanent),
     ]),
-    ("menu-view", VIEW),
-    ("menu-go", &[
+    Sub("menu-view", VIEW),
+    Sub("menu-go", &[
         A(Action::FirstFile), A(Action::PreviousFile), A(Action::NextFile), A(Action::LastFile), A(Action::RandomFile),
     ]),
-    ("menu-markup", &[
+    Sub("menu-markup", &[
         A(Action::Markup), A(Action::Crop), Sep,
         A(Action::SaveProject), A(Action::Export), A(Action::OverwriteOriginal),
     ]),
-    ("menu-tools", TOOLS),
-    ("menu-help", HELP),
+    Sub("menu-tools", TOOLS),
+    A(Action::Options),
+    Sub("menu-help", HELP),
 ];
 
 #[rustfmt::skip]
@@ -90,7 +98,7 @@ const CONTEXT: &[Entry] = &[
     A(Action::Open), A(Action::OpenUrl), RECENT, OPEN_WITH, A(Action::OpenContainingFolder),
     A(Action::ShowFileInfo), Sep, A(Action::Markup), A(Action::Rename), A(Action::Delete), Sep,
     A(Action::NextFile), A(Action::PreviousFile), Sep,
-    Sub("menu-view", VIEW), Sub("menu-tools", TOOLS), Sub("menu-help", HELP),
+    Sub("menu-view", VIEW), Sub("menu-tools", TOOLS), A(Action::Options), Sub("menu-help", HELP),
 ];
 
 /// Texts that depend on state.
@@ -129,8 +137,16 @@ impl Menus {
     pub fn build(shortcuts: &Shortcuts) -> Menus {
         let (mut items, mut dynamic) = (Vec::new(), Vec::new());
         let bar = Menu::new();
-        for (name, entries) in BAR {
-            let _ = bar.append(&submenu(name, entries, &mut items, &mut dynamic));
+        for e in BAR {
+            match e {
+                Sub(name, entries) => {
+                    let _ = bar.append(&submenu(name, entries, &mut items, &mut dynamic));
+                }
+                A(a) => {
+                    let _ = bar.append(&item(*a, &mut items));
+                }
+                _ => {}
+            }
         }
         let context = submenu("", CONTEXT, &mut items, &mut dynamic);
         let keys = items.iter().map(|(a, _)| shortcuts.keys(*a).first().cloned()).collect();
@@ -269,6 +285,12 @@ impl Menus {
     }
 }
 
+fn item(a: Action, items: &mut Vec<(Action, MenuItem)>) -> MenuItem {
+    let item = MenuItem::with_id(actions::info(a).key, actions::name(a), true, None);
+    items.push((a, item.clone()));
+    item
+}
+
 fn submenu(
     name: &str,
     entries: &[Entry],
@@ -281,9 +303,7 @@ fn submenu(
     for e in entries {
         match e {
             A(a) => {
-                let item = MenuItem::with_id(actions::info(*a).key, actions::name(*a), true, None);
-                let _ = s.append(&item);
-                items.push((*a, item));
+                let _ = s.append(&item(*a, items));
             }
             Sep => {
                 let _ = s.append(&PredefinedMenuItem::separator());

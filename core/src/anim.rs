@@ -149,18 +149,23 @@ pub fn source_frame(bytes: &[u8], format: Format, n: usize) -> Result<(SourceFra
     Ok((f, icc))
 }
 
-/// Frame `n` encoded as PNG with the source ICC profile (Save Frame As).
-pub fn frame_png(bytes: &[u8], format: Format, n: usize) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder;
+/// Frame `n` encoded with the export options, source ICC profile kept (Save Frame As).
+/// Returns the file's bytes and the frame size.
+pub fn export_frame(
+    bytes: &[u8],
+    format: Format,
+    n: usize,
+    o: &crate::export::ExportOptions,
+) -> Result<(Vec<u8>, u32, u32), String> {
     let (f, icc) = source_frame(bytes, format, n)?;
-    let mut out = Vec::new();
-    let mut e = image::codecs::png::PngEncoder::new(&mut out);
-    if let Some(icc) = icc {
-        let _ = e.set_icc_profile(icc);
-    }
-    e.write_image(&f.rgba, f.w, f.h, image::ExtendedColorType::Rgba8)
-        .map_err(|e| e.to_string())?;
-    Ok(out)
+    let flat = crate::export::Flat {
+        w: f.w,
+        h: f.h,
+        pixels: crate::decode::Pixels::Rgba8(f.rgba),
+        icc: icc.map(Into::into),
+    };
+    let out = crate::export::encode(&flat, None, o).map_err(|e| e.to_string())?;
+    Ok((out, f.w, f.h))
 }
 
 /// Frame ready for upload (view space, premultiplied).
@@ -409,6 +414,26 @@ impl Player {
         self.pump();
         self.finished = false;
         self.step(now)
+    }
+
+    /// "Previous Frame" (Shift+N): one frame back, from the first to the last. Animations too big
+    /// to keep in memory are decoded forward only: nothing happens for them.
+    pub fn previous_frame(&mut self, now: Instant) -> Option<Arc<ViewFrame>> {
+        self.pump();
+        if self.streaming || self.frames.is_empty() {
+            return None;
+        }
+        self.index = match self.index {
+            0 if self.complete => self.frames.len() - 1,
+            0 => return None,
+            i => i - 1,
+        };
+        self.finished = false;
+        let f = self.frames[self.index].clone();
+        self.due = Some(now + self.scaled(f.delay));
+        self.current = Some(f.clone());
+        self.shown += 1;
+        Some(f)
     }
 
     fn step(&mut self, now: Instant) -> Option<Arc<ViewFrame>> {

@@ -29,11 +29,13 @@ pub enum Action {
     FullScreen,
     SaveFrameAs,
     Pause,
+    PreviousFrame,
     NextFrame,
     DecreaseSpeed,
     ResetSpeed,
     IncreaseSpeed,
     Slideshow,
+    ColorPicker,
     Options,
     Quit,
     CloseWindow,
@@ -121,11 +123,13 @@ pub const ACTIONS: &[(Action, ActionInfo)] = &[
     (Action::FullScreen,           a("fullscreen",           &["F11", "Alt+Enter"], Always)),
     (Action::SaveFrameAs,          a("saveframeas",          &["Ctrl+S"], NeedsAnimation)),
     (Action::Pause,                a("pause",                &["P"], NeedsAnimation)),
+    (Action::PreviousFrame,        a("previousframe",        &["Shift+N"], NeedsAnimation)),
     (Action::NextFrame,            a("nextframe",            &["N"], NeedsAnimation)),
     (Action::DecreaseSpeed,        a("decreasespeed",        &["["], NeedsAnimation)),
     (Action::ResetSpeed,           a("resetspeed",           &["\\"], NeedsAnimation)),
     (Action::IncreaseSpeed,        a("increasespeed",        &["]"], NeedsAnimation)),
     (Action::Slideshow,            a("slideshow",            &[], NeedsImage)),
+    (Action::ColorPicker,          a("colorpicker",          &[], Always)),
     (Action::Options,              a("options",              &[], Always)),
     (Action::Quit,                 a("quit",                 &["Ctrl+Q"], Always)),
     (Action::CloseWindow,          a("closewindow",          &["Ctrl+W"], Always)),
@@ -221,7 +225,7 @@ mod tests {
         assert!(!is_enabled(Action::Undo, &image));
         assert!(is_enabled(Action::Undo, &EnableState { has_undo: true, ..none }));
         // always available
-        for a in [Action::Options, Action::Welcome] {
+        for a in [Action::Options, Action::Welcome, Action::ColorPicker] {
             assert!(is_enabled(a, &none), "{a:?}");
         }
         // Markup needs an editable image, Redo needs Markup

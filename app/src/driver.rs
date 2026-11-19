@@ -57,6 +57,10 @@ pub struct Observation {
     pub open_with_menu: Vec<String>,
     /// Kinds of the open tool windows ("settings", "about", "welcome", "update").
     pub tools: Vec<&'static str>,
+    /// Color Picker: its colour and whether clicks on the image pick.
+    pub color: Option<([u8; 3], bool)>,
+    /// Color Picker history (state), most recent first.
+    pub recent_colors: Vec<[u8; 3]>,
     /// Settings in use by the app.
     pub settings: rv_core::settings::Settings,
     /// UI language in use.

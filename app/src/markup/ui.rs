@@ -33,14 +33,19 @@ pub fn show(ctx: &egui::Context, m: &mut Markup, t: &Affine, ppp: f32, scale: f3
 
 fn toolbar(ctx: &egui::Context, m: &mut Markup, out: &mut Option<Out>) {
     use crate::ui::icons::{self, Icon};
-    egui::Area::new(egui::Id::unique("markup toolbar"))
-        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 6.0))
+    let id = egui::Id::unique("markup toolbar");
+    // moved only by its grip; the offset is kept for the window's life
+    let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(id)).unwrap_or_default();
+    egui::Area::new(id)
+        .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 6.0) + offset)
+        .movable(false)
         .show(ctx, |ui| {
             crate::ui::style::bar(ui.style()).show(ui, |ui| {
                 // narrow windows: the bar wraps onto more rows instead of being cut
                 ui.set_max_width((ctx.content_rect().width() - 24.0).max(120.0));
                 ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                 ui.horizontal_wrapped(|ui| {
+                    grip(ui, id, offset);
                     for (tool, icon, id, key) in [
                         (Tool::Select, Icon::Select, "markup-tool-select", "V"),
                         (Tool::Crop, Icon::Crop, "markup-tool-crop", "C"),
@@ -100,6 +105,30 @@ fn toolbar(ctx: &egui::Context, m: &mut Markup, out: &mut Option<Out>) {
                 });
             });
         });
+}
+
+/// The handle at the left end of the toolbar: dragging it moves the bar, kept on screen.
+fn grip(ui: &mut egui::Ui, id: egui::Id, offset: egui::Vec2) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 26.0), egui::Sense::drag());
+    let resp = resp.on_hover_text(t("markup-move-bar"));
+    let color = ui.style().interact(&resp).fg_stroke.color;
+    crate::ui::icons::paint(
+        ui.painter(),
+        rect.shrink2(egui::vec2(3.0, 7.0)),
+        crate::ui::icons::Icon::Grip,
+        color,
+    );
+    if resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let screen = ui.ctx().content_rect();
+        let bar = ui.ctx().memory(|m| m.area_rect(id)).unwrap_or(screen);
+        let d = resp.drag_delta();
+        let dx = d.x.clamp(screen.left() - bar.left(), screen.right() - bar.right());
+        let dy = d.y.clamp(screen.top() - bar.top(), screen.bottom() - bar.bottom());
+        ui.ctx().data_mut(|m| m.insert_temp(id, offset + egui::vec2(dx, dy)));
+    } else if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
 }
 
 fn start_gesture(m: &mut Markup) {

@@ -5,7 +5,7 @@ use crate::formats::Format;
 use image::{ColorType, DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use std::io::Cursor;
 
-fn image_format(f: Format) -> Option<ImageFormat> {
+pub(crate) fn image_format(f: Format) -> Option<ImageFormat> {
     Some(match f {
         Format::Jpeg => ImageFormat::Jpeg,
         Format::Png => ImageFormat::Png,

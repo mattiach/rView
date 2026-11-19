@@ -45,6 +45,11 @@ pub enum UserEvent {
     AnimWake,
     /// Save Frame As finished (Err = message for the user).
     Saved(Result<(), String>),
+    /// File Info details of `path`, read on a worker.
+    Details {
+        path: PathBuf,
+        details: Arc<rv_core::details::Details>,
+    },
     /// Recycle Bin / permanent delete finished (Ok(Some(id)) = undoable).
     Deleted {
         window: WindowId,
@@ -164,6 +169,11 @@ pub struct App {
     /// A driver runs the app: messages are recorded, not shown, and windows are cloaked (the
     /// driver itself is taken out of `App` while its steps run).
     record_messages: bool,
+    /// The viewer window the Color Picker reads (and is owned by).
+    color_target: Option<WindowId>,
+    /// A worker is reading File Info details (one at a time: fast browsing doesn't pile up
+    /// full decodes).
+    details_busy: bool,
     /// Tests: the answer of the next Save dialog (`Step::SavePath`).
     next_save_path: Option<PathBuf>,
     /// Tests: the button of the next unsaved-changes prompt (`Step::Answer`).
@@ -275,6 +285,8 @@ impl App {
             failures: Vec::new(),
             last_message: None,
             record_messages,
+            color_target: None,
+            details_busy: false,
             next_save_path: None,
             driver_answer: None,
             downloads: Vec::new(),
@@ -719,6 +731,10 @@ impl App {
                 w.dialog = None;
                 self.export(id, o);
             }
+            DialogOutcome::ExportFrame(o, n) => {
+                w.dialog = None;
+                self.save_frame(id, o, n);
+            }
             DialogOutcome::OpenUrl(url) => {
                 w.dialog = None;
                 if ui::openurl::is_url(&url) {
@@ -751,12 +767,20 @@ impl App {
             return;
         };
         if w.info_file.as_ref().is_none_or(|(p, _)| *p != path) {
-            let facts = std::fs::metadata(&path)
-                .ok()
-                .map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
+            let facts = std::fs::metadata(&path).ok().map(|m| ui::info::FileFacts {
+                bytes: m.len(),
+                modified: m.modified().unwrap_or(std::time::UNIX_EPOCH),
+                created: m.created().ok(),
+            });
             w.info_file = Some((path.clone(), facts));
         }
         let frames = w.player.as_mut().and_then(|p| p.frame_count());
+        let details = w
+            .info_details
+            .as_ref()
+            .filter(|(p, _)| *p == path)
+            .map(|(_, d)| d.clone());
+        let pending = details.is_none() && w.error.is_none();
         let rows = match (&w.info, w.image_size, &w.error) {
             (Some(info), Some(size), None) => ui::info::rows(
                 &ui::info::Facts {
@@ -765,24 +789,59 @@ impl App {
                     info,
                     frames,
                     file: w.info_file.as_ref().and_then(|(_, f)| *f),
+                    details: details.as_deref(),
                 },
                 &self.locale,
             ),
             _ => vec![
-                ("info-name", Self::name_of(&path)),
+                (ui::info::Tab::General, "info-name", Self::name_of(&path)),
                 (
+                    ui::info::Tab::General,
                     "info-location",
                     path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
                 ),
             ],
         };
-        if rows != w.info_rows {
+        if rows != w.info_rows || pending != w.info_pending {
             w.info_rows = rows;
+            w.info_pending = pending;
             w.window.request_redraw();
+        }
+        if pending && !self.details_busy {
+            self.details_busy = true;
+            let opts = self.decode_opts;
+            self.spawn(move || {
+                let ext = rv_core::formats::Format::from_path(&path);
+                let details = std::fs::read(&path)
+                    .map(|b| rv_core::details::read(&b, ext, &opts))
+                    .unwrap_or_default();
+                UserEvent::Details {
+                    path,
+                    details: Arc::new(details),
+                }
+            });
         }
     }
 
-    /// Open With entries for the file on screen, enumerated in the background.
+    /// Details read: shown by every Info window on that file; the next file waiting is read.
+    fn on_details(&mut self, path: PathBuf, details: Arc<rv_core::details::Details>) {
+        self.details_busy = false;
+        let open: Vec<WindowId> = self
+            .windows
+            .iter_mut()
+            .filter(|(_, w)| w.info_open)
+            .map(|(id, w)| {
+                if w.path.as_deref() == Some(path.as_path()) {
+                    w.info_details = Some((path.clone(), details.clone()));
+                }
+                *id
+            })
+            .collect();
+        for id in open {
+            self.refresh_info(id);
+        }
+    }
+
     fn spawn_open_with(&mut self, id: WindowId) {
         let Some(path) = self.windows.get(&id).and_then(|w| w.path.clone()) else {
             return;
@@ -1088,6 +1147,66 @@ impl App {
         }
     }
 
+    /// Color picking in viewer window `on` (the Color Picker follows it and stays in front of
+    /// it), or nowhere.
+    fn color_picking(&mut self, on: Option<WindowId>) {
+        let on = on.filter(|id| self.windows.contains_key(id));
+        for (id, w) in &mut self.windows {
+            w.set_picking(on == Some(*id));
+        }
+        let Some(t) = self.tools.values_mut().find(|t| t.content.kind() == "color") else {
+            return;
+        };
+        if let Content::Color(c) = &mut t.content {
+            c.picking = on.is_some();
+        }
+        t.window.request_redraw();
+        if let Some(id) = on {
+            self.own_color_picker(id);
+        }
+    }
+
+    /// The Color Picker belongs to the viewer window last activated: it stays in front of it and
+    /// reads it.
+    fn color_follow(&mut self, id: WindowId) {
+        let Some(picking) = self.tools.values().find_map(|t| match &t.content {
+            Content::Color(c) => Some(c.picking),
+            _ => None,
+        }) else {
+            return;
+        };
+        if self.color_target != Some(id) {
+            self.own_color_picker(id);
+            if picking {
+                self.color_picking(Some(id));
+            }
+        }
+    }
+
+    fn own_color_picker(&mut self, id: WindowId) {
+        if self.color_target == Some(id) {
+            return;
+        }
+        if let (Some(t), Some(w)) = (
+            self.tools.values().find(|t| t.content.kind() == "color"),
+            self.windows.get(&id),
+        ) {
+            crate::platform::set_owner(&t.window, &w.window);
+            self.color_target = Some(id);
+        }
+    }
+
+    /// The color history changed: saved, and shown by the Color Picker.
+    fn colors_changed(&mut self) {
+        self.save_state();
+        if let Some(t) = self.tools.values_mut().find(|t| t.content.kind() == "color") {
+            if let Content::Color(c) = &mut t.content {
+                c.history = self.state.recent_colors.clone();
+            }
+            t.window.request_redraw();
+        }
+    }
+
     fn tool_of(&mut self, kind: &str) -> Option<WindowId> {
         self.tools
             .iter()
@@ -1100,7 +1219,19 @@ impl App {
             match o {
                 ToolOut::Apply { settings, shortcuts } => self.apply_settings(settings, Some(shortcuts), true),
                 ToolOut::Close => {
-                    self.tools.remove(&id);
+                    if self.tools.remove(&id).is_some_and(|t| t.content.kind() == "color") {
+                        self.color_picking(None);
+                    }
+                }
+                ToolOut::PickColor => self.color_picking(self.color_target),
+                ToolOut::RememberColor(rgb) => {
+                    if self.state.add_color(rgb) {
+                        self.colors_changed();
+                    }
+                }
+                ToolOut::ClearColors => {
+                    self.state.recent_colors.clear();
+                    self.colors_changed();
                 }
                 ToolOut::OpenUrl(url) => {
                     if self.record_messages {
@@ -2077,6 +2208,11 @@ impl App {
                 let o = ui::options::Options::new(&self.settings, &self.state.shortcuts);
                 self.open_tool(el, Content::Settings(o));
             }
+            Action::ColorPicker => {
+                let c = ui::colorpick::ColorPicker::new(self.state.recent_colors.clone());
+                self.open_tool(el, Content::Color(c));
+                self.color_picking(id);
+            }
             Action::Welcome => {
                 let w = ui::welcome::Welcome::new(self.settings.update_notifications);
                 self.open_tool(el, Content::Welcome(w));
@@ -2094,6 +2230,13 @@ impl App {
         if !self.leave_markup(id) {
             return;
         }
+        // an owned window would be destroyed with its owner, under the tool's surface
+        if self.color_target == Some(id)
+            && let Some(c) = self.tool_of("color")
+        {
+            self.tools.remove(&c);
+            self.color_target = None;
+        }
         let Some(w) = self.windows.get_mut(&id) else { return };
         if let Some(c) = &w.download_cancel {
             c.store(true, Ordering::Relaxed);
@@ -2110,30 +2253,36 @@ impl App {
 
     /// Save Frame As: PNG of the current frame, `<base>-<n>.png`, written atomically
     /// on a worker thread.
+    /// Save Frame As…: the format dialog for the frame on screen; the file name comes after it.
     fn save_frame_as(&mut self, id: WindowId) {
-        let Some(w) = self.windows.get(&id) else { return };
-        let (Some(bytes), Some(p), Some(info), Some(path)) = (&w.anim_bytes, &w.player, &w.info, &w.path) else {
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        let Some(n) = w.player.as_ref().map(|p| p.index()) else {
             return; // NeedsAnimation
         };
-        let n = p.index();
+        w.dialog = Some(Dialog::Export(ui::export::Export::frame(&self.settings.markup, n)));
+        w.window.request_redraw();
+    }
+
+    fn save_frame(&mut self, id: WindowId, o: rv_core::export::ExportOptions, n: usize) {
+        let Some(w) = self.windows.get(&id) else { return };
+        let (Some(bytes), Some(info), Some(path)) = (w.anim_bytes.clone(), &w.info, w.path.clone()) else {
+            return;
+        };
+        let format = info.format;
         let stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let mut dlg = rfd::FileDialog::new()
-            .set_title(i18n::plain(&actions::name(Action::SaveFrameAs)))
-            .set_file_name(format!("{stem}-{n}.png"))
-            .add_filter("PNG", &["png"])
-            .set_parent(w.window.as_ref());
-        if let Some(dir) = path.parent() {
-            dlg = dlg.set_directory(dir);
-        }
-        let Some(dst) = dlg.save_file() else { return };
-        let (bytes, format, proxy) = (bytes.clone(), info.format, self.proxy.clone());
+        let proposed = format!("{stem}-frame{}.{}", n + 1, o.format.exts()[0]);
+        let title = i18n::plain(&actions::name(Action::SaveFrameAs));
+        let Some(dst) = self.pick_save(id, &title, &proposed, path.parent(), (o.format.name(), o.format.exts())) else {
+            return;
+        };
+        let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            let r = rv_core::anim::frame_png(&bytes, format, n).and_then(|png| {
-                let verify = |b: &[u8]| rv_core::decode::probe(b, None).is_some();
-                rv_core::atomic::write_atomic(&dst, &png, verify).map_err(|e| e.to_string())
+            let r = rv_core::anim::export_frame(&bytes, format, n, &o).and_then(|(file, w, h)| {
+                let verify = |b: &[u8]| rv_core::export::verify(b, o.format, w, h);
+                rv_core::atomic::write_atomic(&dst, &file, verify).map_err(|e| e.to_string())
             });
             let _ = proxy.send_event(UserEvent::Saved(r));
         });
@@ -2316,7 +2465,7 @@ impl App {
             has_undo: w.is_some_and(|w| !w.undo.is_empty()),
             info_rows: w
                 .filter(|w| w.info_open)
-                .map(|w| w.info_rows.clone())
+                .map(|w| w.info_rows.iter().map(|(_, k, v)| (*k, v.clone())).collect())
                 .unwrap_or_default(),
             recents: self.state.recents.iter().map(|r| r.name.clone()).collect(),
             recent_menu: w
@@ -2328,6 +2477,11 @@ impl App {
                 .map(|m| m.dynamic_texts().1)
                 .unwrap_or_default(),
             tools: self.tools.values().map(|t| t.content.kind()).collect(),
+            color: self.tools.values().find_map(|t| match &t.content {
+                Content::Color(c) => Some((c.rgb, c.picking)),
+                _ => None,
+            }),
+            recent_colors: self.state.recent_colors.clone(),
             settings: self.settings.clone(),
             language: i18n::current(),
             update_status: self.update_status.text(),
@@ -2547,6 +2701,10 @@ impl App {
         if w.dialog.is_some() {
             return; // keys the dialog's text field didn't take
         }
+        if seq == "Esc" && w.is_picking() {
+            self.color_picking(None);
+            return;
+        }
         if w.markup.is_some() && self.markup_key(id, seq) {
             return;
         }
@@ -2683,6 +2841,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::AnimWake => {} // about_to_wait advances the players
             UserEvent::Saved(Err(e)) => self.message(self.current(), "title-saveframe", e),
+            UserEvent::Details { path, details } => self.on_details(path, details),
             UserEvent::Saved(Ok(())) => {}
             UserEvent::Deleted {
                 window,
@@ -2828,6 +2987,18 @@ impl ApplicationHandler<UserEvent> for App {
             Request::Action(a) => self.dispatch(el, Some(id), a),
             Request::Key(seq) => self.on_key(el, id, &seq),
             Request::Open(path, new) => self.open_paths(el, (!new).then_some(id), vec![path], false),
+            Request::PickColor(x, y) => {
+                let rgb = w.pixel_at(gpu, &self.settings, x, y);
+                if let Some(t) = self.tools.values_mut().find(|t| t.content.kind() == "color") {
+                    if let Content::Color(c) = &mut t.content {
+                        c.set(rgb);
+                    }
+                    t.window.request_redraw();
+                }
+                if self.state.add_color(rgb) {
+                    self.colors_changed();
+                }
+            }
             Request::ContextMenu(x, y) => {
                 w.update_menus();
                 if let (Some(m), Some(h)) = (&w.menus, crate::platform::hwnd(&w.window)) {
@@ -2837,6 +3008,7 @@ impl ApplicationHandler<UserEvent> for App {
             Request::Focused => {
                 self.touch(id);
                 self.check_settings_file();
+                self.color_follow(id);
             }
             Request::Close => self.close_window(el, id),
         }

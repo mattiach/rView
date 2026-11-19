@@ -5,6 +5,7 @@ pub mod atomic;
 pub mod cache;
 pub mod color;
 pub mod decode;
+pub mod details;
 pub mod edit;
 pub mod export;
 pub mod folder;

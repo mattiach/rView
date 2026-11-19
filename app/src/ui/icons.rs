@@ -22,6 +22,9 @@ pub enum Icon {
     Undo,
     Redo,
     Close,
+    Copy,
+    /// Two columns of dots: the universal "drag here" handle.
+    Grip,
 }
 
 /// Icon-only button (28×26 pt), highlighted while `selected`.
@@ -174,6 +177,18 @@ pub fn paint(p: &egui::Painter, r: Rect, icon: Icon, color: Color32) {
         Close => {
             line(&[(0.15, 0.15), (0.85, 0.85)]);
             line(&[(0.85, 0.15), (0.15, 0.85)]);
+        }
+        Copy => {
+            let sheet = |a, b| egui::Rect::from_two_pos(at(a), at(b));
+            p.rect_stroke(sheet((0.34, 0.3), (0.96, 1.0)), 2.0, s, egui::StrokeKind::Middle);
+            line(&[(0.66, 0.16), (0.66, 0.0), (0.04, 0.0), (0.04, 0.7), (0.2, 0.7)]);
+        }
+        Grip => {
+            for x in [0.3, 0.7] {
+                for y in [0.15, 0.5, 0.85] {
+                    p.circle_filled(at((x, y)), 1.6, color);
+                }
+            }
         }
     }
 }

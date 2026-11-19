@@ -379,12 +379,12 @@ fn invoke(e: &UIElement) -> R {
 }
 
 fn main_window() -> Result<HWND, String> {
-    wait_window("main", |c, t| c == "Window Class" && t.ends_with(".png"))
+    wait_window("main", |c, t| c == "Window Class" && t.starts_with("rView - "))
 }
 
 fn menubar(uia: &UIAutomation) -> R {
     let root = element(uia, main_window()?)?;
-    let want = ["File", "Edit", "View", "Go", "Markup", "Tools", "Help"];
+    let want = ["File", "Edit", "View", "Go", "Markup", "Tools", "Settings", "Help"];
     let items = find(uia, &root, Some(ControlType::MenuItem), |v| {
         want.iter().all(|w| named(v, w).is_some())
     })?;
