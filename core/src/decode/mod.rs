@@ -1,7 +1,7 @@
 //! Decoding to a normalised `DecodedImage`: RGBA, straight alpha, orientation applied.
 
 mod icns;
-mod image_rs;
+pub(crate) mod image_rs;
 mod jxl;
 mod legacy;
 mod svg;
@@ -118,7 +118,7 @@ pub struct Header {
 /// Format from the content, except TIFF-based camera raws (DNG, NEF, CR2, ARW, …): their magic is
 /// plain TIFF, and the TIFF decoder would show their embedded thumbnail (or label them TIFF, which
 /// later phases treat as overwritable). A `.dng` that is really a JPEG stays a JPEG.
-fn resolve_format(bytes: &[u8], ext_format: Option<Format>) -> Option<Format> {
+pub(crate) fn resolve_format(bytes: &[u8], ext_format: Option<Format>) -> Option<Format> {
     match (Format::sniff(bytes), ext_format) {
         (Some(Format::Tiff), Some(Format::Raw)) => Some(Format::Raw),
         (sniffed, ext) => sniffed.or(ext),

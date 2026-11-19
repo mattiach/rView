@@ -70,6 +70,8 @@ pub struct ViewerWindow {
     pub images_shown: u64,
     cursor: Option<(f32, f32)>,
     dragging: Option<(f32, f32)>,
+    /// Color Picker reads this window: crosshair over the image, a click picks the pixel.
+    picking: bool,
     mods: ModifiersState,
     /// First click of a possible double click: time and position (cleared by a drag).
     last_click: Option<(Instant, (f32, f32))>,
@@ -93,9 +95,12 @@ pub struct ViewerWindow {
     pub dialog_outcome: Option<ui::Outcome>,
     /// File Info window open, and its rows (recomputed by the app).
     pub info_open: bool,
-    pub info_rows: Vec<(&'static str, String)>,
-    /// (path, size and modification time) read for the Info rows.
-    pub info_file: Option<(PathBuf, Option<(u64, std::time::SystemTime)>)>,
+    pub info_rows: Vec<ui::info::Row>,
+    /// (path, size and times) read for the Info rows.
+    pub info_file: Option<(PathBuf, Option<ui::info::FileFacts>)>,
+    /// The file's details (read on a worker) and whether they are still being read.
+    pub info_details: Option<(PathBuf, Arc<rv_core::details::Details>)>,
+    pub info_pending: bool,
     /// Undo Delete stack: (original path, Recycle Bin item id).
     /// Undo Delete stack: (file, Recycle Bin item, true = the backup of an Overwrite Original).
     pub undo: Vec<(PathBuf, std::ffi::OsString, bool)>,
@@ -137,6 +142,8 @@ pub enum Request {
     /// Open in this window (false) or in a new one (true).
     Open(PathBuf, bool),
     ContextMenu(f64, f64),
+    /// Color picking: a click at this window point (physical px).
+    PickColor(f32, f32),
     Close,
 }
 
@@ -241,6 +248,7 @@ impl ViewerWindow {
             images_shown: 0,
             cursor: None,
             dragging: None,
+            picking: false,
             mods: ModifiersState::empty(),
             last_click: None,
             dropped: 0,
@@ -255,6 +263,8 @@ impl ViewerWindow {
             info_open: false,
             info_rows: Vec::new(),
             info_file: None,
+            info_details: None,
+            info_pending: false,
             undo: Vec::new(),
             pending_ops: 0,
             download_cancel: None,
@@ -593,8 +603,13 @@ impl ViewerWindow {
         let Some(p) = self.player.as_mut() else { return }; // NeedsAnimation
         match a {
             Action::Pause => p.toggle_pause(now),
-            Action::NextFrame => {
-                if let (Some(f), Some(img)) = (p.next_frame(now), &self.image) {
+            Action::PreviousFrame | Action::NextFrame => {
+                let f = if a == Action::NextFrame {
+                    p.next_frame(now)
+                } else {
+                    p.previous_frame(now)
+                };
+                if let (Some(f), Some(img)) = (f, &self.image) {
                     gpu.rewrite(img, &f.rgba);
                     self.window.request_redraw();
                 }
@@ -618,7 +633,12 @@ impl ViewerWindow {
             Action::Mirror => self.view.set_orient(o.mirrored(), s),
             Action::Flip => self.view.set_orient(o.flipped(), s),
             Action::FullScreen => self.set_fullscreen(!self.is_fullscreen(), s),
-            Action::Pause | Action::NextFrame | Action::DecreaseSpeed | Action::ResetSpeed | Action::IncreaseSpeed => {
+            Action::Pause
+            | Action::PreviousFrame
+            | Action::NextFrame
+            | Action::DecreaseSpeed
+            | Action::ResetSpeed
+            | Action::IncreaseSpeed => {
                 self.anim_action(gpu, a);
                 return true;
             }
@@ -658,6 +678,11 @@ impl ViewerWindow {
                 m.release(rv_core::edit::PointF::default());
             }
             return Request::None;
+        }
+        if self.picking
+            && let Some(r) = self.picking_event(event)
+        {
+            return r;
         }
         if self.markup.is_some()
             && let Some(r) = self.markup_event(s, event)
@@ -748,6 +773,44 @@ impl ViewerWindow {
             _ => {}
         }
         Request::None
+    }
+
+    pub fn is_picking(&self) -> bool {
+        self.picking
+    }
+
+    pub fn set_picking(&mut self, on: bool) {
+        if self.picking != on {
+            self.picking = on;
+            self.window
+                .set_cursor(if on { CursorIcon::Crosshair } else { CursorIcon::Default });
+        }
+    }
+
+    /// The left button while color picking (UI clicks were already taken by egui). None = as usual.
+    fn picking_event(&mut self, event: &WindowEvent) -> Option<Request> {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let p = (position.x as f32, position.y as f32);
+                self.cursor = Some(p);
+                let ctx = self.egui.egui_ctx();
+                let at = egui::pos2(p.0, p.1) / ctx.pixels_per_point();
+                if ctx.layer_id_at(at).is_none_or(|l| l.order == egui::Order::Background) {
+                    self.window.set_cursor(CursorIcon::Crosshair);
+                }
+                Some(Request::None)
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => Some(self.cursor.map_or(Request::None, |(x, y)| Request::PickColor(x, y))),
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                ..
+            } => Some(Request::None),
+            _ => None,
+        }
     }
 
     /// Pointer events in Markup: the left button goes to the tools, the middle one pans. None =
@@ -1220,10 +1283,10 @@ impl ViewerWindow {
         let (dialog, outcome) = (&mut self.dialog, &mut self.dialog_outcome);
         let (markup, markup_out) = (&mut self.markup, &mut self.markup_out);
         let (view_t, view_scale) = (self.view.screen_from_image(), self.view.scale);
-        let (info_open, info_rows) = (&mut self.info_open, &self.info_rows);
+        let (info_open, info_rows, info_pending) = (&mut self.info_open, &self.info_rows, self.info_pending);
         let mut out = self.egui.egui_ctx().run_ui(raw, |ui| {
             if *info_open {
-                ui::info::show(ui.ctx(), info_open, info_rows);
+                ui::info::show(ui.ctx(), info_open, info_rows, info_pending);
             }
             if let Some(m) = markup
                 && let Some(o) = crate::markup::ui::show(ui.ctx(), m, &view_t, ui.ctx().pixels_per_point(), view_scale)
@@ -1309,6 +1372,20 @@ impl ViewerWindow {
 
     /// Offscreen render of the content at window size, read back as RGBA8 (E2E snapshot).
     pub fn snapshot(&mut self, gpu: &Gpu, s: &Settings) -> (u32, u32, Vec<u8>) {
+        let (w, h) = self.viewport();
+        (w, h, self.read_back(gpu, s, (0, 0, w, h)))
+    }
+
+    /// The colour shown at a window point (physical px): the image as drawn, without the UI.
+    pub fn pixel_at(&mut self, gpu: &Gpu, s: &Settings, x: f32, y: f32) -> [u8; 3] {
+        let (w, h) = self.viewport();
+        let (x, y) = ((x.max(0.0) as u32).min(w - 1), (y.max(0.0) as u32).min(h - 1));
+        let px = self.read_back(gpu, s, (x, y, 1, 1));
+        [px[0], px[1], px[2]]
+    }
+
+    /// Render the content offscreen at window size; read back the region (x, y, w, h) as RGBA8.
+    fn read_back(&mut self, gpu: &Gpu, s: &Settings, region: (u32, u32, u32, u32)) -> Vec<u8> {
         self.sync_markup_view(s);
         self.sync_patches(gpu);
         self.sync_overlay(gpu, true);
@@ -1328,10 +1405,11 @@ impl ViewerWindow {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let (rx, ry, rw, rh) = region;
+        let row = (rw * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("snapshot"),
-            size: row as u64 * h as u64,
+            size: row as u64 * rh as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1345,7 +1423,10 @@ impl ViewerWindow {
             fmt,
         ));
         enc.copy_texture_to_buffer(
-            tex.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: rx, y: ry, z: 0 },
+                ..tex.as_image_copy()
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -1355,8 +1436,8 @@ impl ViewerWindow {
                 },
             },
             wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: rw,
+                height: rh,
                 depth_or_array_layers: 1,
             },
         );
@@ -1364,11 +1445,11 @@ impl ViewerWindow {
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         let data = buf.slice(..).get_mapped_range().expect("mapped");
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        let mut out = Vec::with_capacity((rw * rh * 4) as usize);
         for r in data.chunks_exact(row as usize) {
-            out.extend_from_slice(&r[..(w * 4) as usize]);
+            out.extend_from_slice(&r[..(rw * 4) as usize]);
         }
-        (w, h, out)
+        out
     }
 }
 

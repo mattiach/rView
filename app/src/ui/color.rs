@@ -4,6 +4,7 @@
 use egui::ecolor::{Hsva, HsvaGamma};
 use egui::{Color32, Mesh, Pos2, Rect, Response, Sense, Stroke, Vec2, vec2};
 
+/// Side of the saturation/value square in the colour button's popup.
 const WIDTH: f32 = 256.0;
 /// Gradient quads per side.
 const STEPS: usize = 16;
@@ -21,31 +22,44 @@ pub fn edit_button(ui: &mut egui::Ui, rgb: &mut [u8; 3]) -> Response {
         .id(popup_id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            // hue and saturation survive while the colour is grey or black
-            let mut hsv = ui
-                .data(|d| d.get_temp::<HsvaGamma>(popup_id))
-                .filter(|h| to_rgb(*h) == *rgb)
-                .unwrap_or_else(|| HsvaGamma::from(Hsva::from_srgb(*rgb)));
-            let before = hsv;
-            sv_square(ui, &mut hsv);
-            hue_bar(ui, &mut hsv);
-            let mut values = to_rgb(hsv);
-            let mut typed = false;
-            ui.horizontal(|ui| {
-                for (v, p) in values.iter_mut().zip(["R ", "G ", "B "]) {
-                    typed |= ui.add(egui::DragValue::new(v).speed(0.5).prefix(p)).changed();
-                }
-            });
-            if typed {
-                hsv = HsvaGamma::from(Hsva::from_srgb(values));
-            }
-            if hsv != before {
-                *rgb = to_rgb(hsv);
+            if picker(ui, popup_id, rgb, vec2(WIDTH, WIDTH)) {
                 button.mark_changed();
             }
-            ui.data_mut(|d| d.insert_temp(popup_id, hsv));
         });
     button
+}
+
+/// Saturation/value area of `sv` size, hue bar and R G B values as wide as it; true when `rgb`
+/// changed.
+pub fn picker(ui: &mut egui::Ui, id: egui::Id, rgb: &mut [u8; 3], sv: Vec2) -> bool {
+    // hue and saturation survive while the colour is grey or black
+    let mut hsv = ui
+        .data(|d| d.get_temp::<HsvaGamma>(id))
+        .filter(|h| to_rgb(*h) == *rgb)
+        .unwrap_or_else(|| HsvaGamma::from(Hsva::from_srgb(*rgb)));
+    let before = hsv;
+    sv_square(ui, &mut hsv, sv);
+    hue_bar(ui, &mut hsv, sv.x);
+    let mut values = to_rgb(hsv);
+    let mut typed = false;
+    ui.horizontal(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let field = vec2((sv.x - 2.0 * gap) / 3.0, ui.spacing().interact_size.y);
+        for (v, p) in values.iter_mut().zip(["R ", "G ", "B "]) {
+            typed |= ui
+                .add_sized(field, egui::DragValue::new(v).speed(0.5).prefix(p))
+                .changed();
+        }
+    });
+    if typed {
+        hsv = HsvaGamma::from(Hsva::from_srgb(values));
+    }
+    ui.data_mut(|d| d.insert_temp(id, hsv));
+    let changed = hsv != before;
+    if changed {
+        *rgb = to_rgb(hsv);
+    }
+    changed
 }
 
 fn to_rgb(h: HsvaGamma) -> [u8; 3] {
@@ -85,8 +99,8 @@ fn drag(ui: &mut egui::Ui, size: Vec2) -> (Rect, Option<(f32, f32)>) {
     (rect, at)
 }
 
-fn sv_square(ui: &mut egui::Ui, hsv: &mut HsvaGamma) {
-    let (rect, at) = drag(ui, Vec2::splat(WIDTH));
+fn sv_square(ui: &mut egui::Ui, hsv: &mut HsvaGamma, size: Vec2) {
+    let (rect, at) = drag(ui, size);
     if let Some((x, y)) = at {
         (hsv.s, hsv.v) = (x, 1.0 - y);
     }
@@ -95,8 +109,8 @@ fn sv_square(ui: &mut egui::Ui, hsv: &mut HsvaGamma) {
     ring(ui, rect.lerp_inside(vec2(hsv.s, 1.0 - hsv.v)), hsv.v);
 }
 
-fn hue_bar(ui: &mut egui::Ui, hsv: &mut HsvaGamma) {
-    let (rect, at) = drag(ui, vec2(WIDTH, ui.spacing().interact_size.y));
+fn hue_bar(ui: &mut egui::Ui, hsv: &mut HsvaGamma, width: f32) {
+    let (rect, at) = drag(ui, vec2(width, ui.spacing().interact_size.y));
     if let Some((x, _)) = at {
         hsv.h = x;
     }

@@ -1,5 +1,5 @@
-//! E2E: a 200-frame GIF plays smoothly; pause, next frame, speed; the frame on screen
-//! is the one the player reports.
+//! E2E: a 200-frame GIF plays smoothly; pause, next and previous frame, Save Frame As in a chosen
+//! format, speed; the frame on screen is the one the player reports.
 
 use rview::actions::Action;
 use rview::driver::{Observation, Step};
@@ -42,6 +42,10 @@ fn main() {
 
     let shown = Arc::new(Mutex::new(0u64));
     let (s1, s2, s3) = (shown.clone(), shown.clone(), shown.clone());
+    let index = Arc::new(Mutex::new(0usize));
+    let (s4, s5) = (index.clone(), index.clone());
+    let frame_jpg = dir.join("frame.jpg");
+    let (saved, frame_file) = (frame_jpg.clone(), frame_jpg.clone());
     let steps = vec![
         Step::WaitIdle,
         check(|o| (o.anim.is_some()).then_some(()).ok_or(format!("not animated: {o:?}"))),
@@ -88,6 +92,41 @@ fn main() {
             let ok = paused && got.iter().zip(want).all(|(&a, b)| (a as i32 - b as i32).abs() <= 2);
             ok.then_some(())
                 .ok_or(format!("frame {idx}: screen {got:?}, expected {want:?}"))
+        }),
+        check(move |o| {
+            *s4.lock().unwrap() = o.anim.unwrap().0;
+            Ok(())
+        }),
+        Step::Do(Action::PreviousFrame),
+        check(move |o| {
+            let (idx, _, paused, _) = o.anim.unwrap();
+            let want = (*s5.lock().unwrap() + N - 1) % N;
+            (paused && idx == want)
+                .then_some(())
+                .ok_or(format!("previous frame: {idx}, expected {want}"))
+        }),
+        // Ctrl+S: the format dialog (PNG proposed), then the file name; JPEG chosen here
+        Step::Key("Ctrl+S".into()),
+        check(|o| {
+            let ok = o.dialog.as_ref().is_some_and(|(k, t, _)| *k == "export" && t == "PNG");
+            ok.then_some(()).ok_or(format!("Save Frame As dialog: {:?}", o.dialog))
+        }),
+        Step::DialogText("JPEG".into()),
+        Step::SavePath(frame_jpg.clone()),
+        Step::DialogAccept,
+        Step::Until(Box::new(move || saved.exists()), Duration::from_secs(10)),
+        check(move |o| {
+            let idx = o.anim.unwrap().0;
+            let img = image::open(&frame_file)
+                .map_err(|e| format!("saved frame: {e}"))?
+                .into_rgb8();
+            let got = img.get_pixel(W as u32 / 2, H as u32 / 2).0;
+            let want = color(idx);
+            let ok = image::ImageFormat::from_path(&frame_file).ok() == Some(image::ImageFormat::Jpeg)
+                && img.dimensions() == (W as u32, H as u32)
+                && got.iter().zip(want).all(|(&a, b)| (a as i32 - b as i32).abs() <= 6);
+            ok.then_some(())
+                .ok_or(format!("saved frame {idx}: {got:?}, expected {want:?}"))
         }),
         Step::Do(Action::IncreaseSpeed),
         Step::Do(Action::IncreaseSpeed),

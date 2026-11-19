@@ -1,5 +1,5 @@
-//! Export dialog: format, JPEG quality and background, metadata preset. The file
-//! name is asked next, by the system Save dialog.
+//! Export dialog (Markup Export, and Save Frame As for animations): format, JPEG quality and
+//! background, metadata preset. The file name is asked next, by the system Save dialog.
 
 use crate::i18n::t;
 use rv_core::export::{ExportFormat, ExportOptions};
@@ -9,6 +9,8 @@ pub struct Export {
     pub opts: ExportOptions,
     /// The document has redactions: strip-all is the default.
     pub redactions: bool,
+    /// Save Frame As: this frame (0-based) of the animation; a frame carries no metadata.
+    pub frame: Option<usize>,
 }
 
 pub fn preset_label(p: MetadataPreset) -> String {
@@ -37,7 +39,15 @@ impl Export {
                 },
             },
             redactions,
+            frame: None,
         }
+    }
+
+    /// Save Frame As: PNG by default (lossless, transparency kept).
+    pub fn frame(m: &rv_core::settings::MarkupSettings, n: usize) -> Export {
+        let mut e = Export::new(m, None, false);
+        e.frame = Some(n);
+        e
     }
 
     /// The driver picks the format by name ("PNG", "JPEG"…).
@@ -70,6 +80,9 @@ impl Export {
                     super::color::edit_button(ui, &mut o.background);
                     ui.end_row();
                 }
+                if self.frame.is_some() {
+                    return;
+                }
                 ui.label(t("export-metadata"));
                 egui::ComboBox::from_id_salt("export metadata")
                     .selected_text(preset_label(o.preset))
@@ -86,7 +99,7 @@ impl Export {
         if o.format == ExportFormat::Jpeg {
             note(ui, "export-jpeg-note");
         }
-        if matches!(o.format, ExportFormat::Tiff | ExportFormat::Bmp) {
+        if self.frame.is_none() && matches!(o.format, ExportFormat::Tiff | ExportFormat::Bmp) {
             note(ui, "export-no-exif-note");
         }
         if self.redactions {

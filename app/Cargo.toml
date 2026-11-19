@@ -102,6 +102,10 @@ name = "e2e_color"
 harness = false
 
 [[test]]
+name = "e2e_pick"
+harness = false
+
+[[test]]
 name = "e2e_windows"
 harness = false
 

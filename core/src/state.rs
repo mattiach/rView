@@ -1,5 +1,6 @@
 //! Persistent state, separate from settings: `%APPDATA%\rView\state.toml`.
-//! Window geometry, recent files, firstlaunch, configversion, lastupdatecheck, shortcuts.
+//! Window geometry, recent files and colors, firstlaunch, configversion, lastupdatecheck,
+//! shortcuts.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,9 @@ pub struct Recent {
 /// Entries kept in Open Recent.
 pub const MAX_RECENTS: usize = 10;
 
+/// Colors kept in the Color Picker's history.
+pub const MAX_COLORS: usize = 10;
+
 /// Version of the settings/state format written by this build.
 pub const CONFIG_VERSION: u32 = 1;
 
@@ -46,6 +50,9 @@ pub struct State {
     pub last_file_dialog_dir: Option<PathBuf>,
     /// Custom shortcuts: action key → key sequences, replacing that action's defaults.
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
+    /// Color Picker history (sRGB), most recent first.
+    #[serde(rename = "recentcolors")]
+    pub recent_colors: Vec<[u8; 3]>,
 }
 
 impl Default for State {
@@ -58,6 +65,7 @@ impl Default for State {
             last_update_check: 0,
             last_file_dialog_dir: None,
             shortcuts: Default::default(),
+            recent_colors: Vec::new(),
         }
     }
 }
@@ -83,6 +91,18 @@ impl State {
             },
         );
         self.recents.truncate(MAX_RECENTS);
+        true
+    }
+
+    /// `rgb` becomes the first color of the history (moved up if already there), at most
+    /// MAX_COLORS. Returns true if the list changed.
+    pub fn add_color(&mut self, rgb: [u8; 3]) -> bool {
+        if self.recent_colors.first() == Some(&rgb) {
+            return false;
+        }
+        self.recent_colors.retain(|c| *c != rgb);
+        self.recent_colors.insert(0, rgb);
+        self.recent_colors.truncate(MAX_COLORS);
         true
     }
 
@@ -167,6 +187,7 @@ mod tests {
             last_update_check: 1_763_000_000,
             last_file_dialog_dir: Some(PathBuf::from(r"C:\Foto")),
             shortcuts: [("nextfile".to_string(), vec!["Space".to_string()])].into(),
+            recent_colors: vec![[10, 132, 255], [0, 0, 0]],
         };
         save(&p, &s).unwrap();
         assert_eq!(load(&p), s);
@@ -177,6 +198,21 @@ mod tests {
         assert_eq!(load(&p), State::default());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(default_path().is_some_and(|p| p.ends_with("rView\\state.toml")));
+    }
+
+    #[test]
+    fn colors_order_dedup_limit() {
+        let mut s = State::default();
+        for i in 0..12u8 {
+            assert!(s.add_color([i, 0, 0]));
+        }
+        assert_eq!(s.recent_colors.len(), MAX_COLORS);
+        assert_eq!(s.recent_colors[0], [11, 0, 0]);
+        assert_eq!(s.recent_colors[9], [2, 0, 0], "oldest dropped");
+        assert!(s.add_color([5, 0, 0]), "moved up");
+        assert_eq!(s.recent_colors[..2], [[5, 0, 0], [11, 0, 0]]);
+        assert_eq!(s.recent_colors.len(), MAX_COLORS, "not duplicated");
+        assert!(!s.add_color([5, 0, 0]), "already first: no change");
     }
 
     #[test]

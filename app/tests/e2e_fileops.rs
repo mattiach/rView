@@ -204,6 +204,19 @@ fn main() {
                 o,
             )
         }),
+        // the details come from a worker shortly after
+        Step::Sleep(std::time::Duration::from_millis(500)),
+        Step::WaitIdle,
+        check(|o| {
+            let get = |k: &str| o.info_rows.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
+            expect(
+                get("info-channels").is_some()
+                    && get("info-unique-colors").is_some()
+                    && get("info-png-chunks").is_some_and(|c| c.starts_with("IHDR") && c.ends_with("IEND")),
+                "info details read from the file",
+                o,
+            )
+        }),
         Step::Do(Action::NextFile),
         Step::WaitIdle,
         check(|o| {

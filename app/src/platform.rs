@@ -376,6 +376,19 @@ fn overwrite(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Make `window` owned by `owner`: it stays in front of it, and Windows destroys it with it
+/// (close it first).
+pub fn set_owner(window: &Window, owner: &Window) {
+    use windows::Win32::UI::WindowsAndMessaging::{GWLP_HWNDPARENT, SetWindowLongPtrW};
+    let (Some(w), Some(o)) = (hwnd(window), hwnd(owner)) else {
+        return;
+    };
+    // SAFETY: both are live top-level windows of this thread.
+    unsafe {
+        SetWindowLongPtrW(w, GWLP_HWNDPARENT, o.0 as isize);
+    }
+}
+
 /// The grab cursor over the title bar too, as over the movable panels (Windows draws grab and
 /// grabbing as its move cursor).
 pub fn grab_cursor_on_caption(window: &Window) {

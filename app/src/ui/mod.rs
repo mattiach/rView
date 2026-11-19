@@ -1,9 +1,10 @@
 //! egui dialogs. Inside a viewer window: Rename, Open URL with its download progress,
-//! Export (Markup), the non-modal File Info. In their own windows (`tool`): Settings, Welcome, update notice.
+//! Export (Markup), the non-modal File Info. In their own windows (`tool`): Settings, Welcome, update notice, Color Picker.
 //! A dialog never acts by itself: it returns an outcome the app runs, the same one the E2E driver
 //! gets by pressing its buttons.
 
 pub mod color;
+pub mod colorpick;
 pub mod export;
 pub mod icons;
 pub mod info;
@@ -58,6 +59,8 @@ pub enum Outcome {
     CancelDownload,
     /// Export the Markup document with these options (the file name is asked next).
     Export(rv_core::export::ExportOptions),
+    /// Save this frame (0-based) of the animation with these options (the file name is next).
+    ExportFrame(rv_core::export::ExportOptions, usize),
     Closed,
 }
 
@@ -87,7 +90,10 @@ impl Dialog {
             Dialog::Rename(r) => Outcome::Rename(r.path.clone(), r.text.trim().to_string()),
             Dialog::OpenUrl(o) => Outcome::OpenUrl(o.text.trim().to_string()),
             Dialog::Download(_) => Outcome::CancelDownload,
-            Dialog::Export(e) => Outcome::Export(e.opts),
+            Dialog::Export(e) => match e.frame {
+                Some(n) => Outcome::ExportFrame(e.opts, n),
+                None => Outcome::Export(e.opts),
+            },
         }
     }
 
@@ -105,6 +111,7 @@ impl Dialog {
             Dialog::Rename(_) => ("rename", t("rename-title")),
             Dialog::OpenUrl(_) => ("openurl", t("openurl-title")),
             Dialog::Download(_) => ("download", t("download-title")),
+            Dialog::Export(e) if e.frame.is_some() => ("export", t("title-saveframe")),
             Dialog::Export(_) => ("export", t("export-title")),
         };
         let mut done = None;
