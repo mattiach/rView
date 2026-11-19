@@ -49,10 +49,12 @@ fn main() {
     // no Welcome window in this test
     std::fs::write(&state_file, "firstlaunch = false\n").unwrap();
     let (sf1, sf2, st1) = (settings_file.clone(), settings_file.clone(), state_file.clone());
+    let size: &str = rview::layout::format_bytes(std::fs::metadata(dir.join("a.png")).unwrap().len()).leak();
+    let full = move |names: [&str; 2]| names.map(|n| format!("rView - {n}.png - {size}"));
 
     let steps = vec![
         Step::WaitIdle,
-        check(|o| expect(o.windows == 2 && o.titles == ["a.png", "c.png"], "two windows", o)),
+        check(move |o| expect(o.windows == 2 && o.titles == full(["a", "c"]), "two windows", o)),
         corner([0x20, 0x20, 0x20]),
         Step::Do(Action::Options),
         Step::WaitIdle,
@@ -60,11 +62,11 @@ fn main() {
         Step::Do(Action::Options), // a second request brings the same window forward
         check(|o| expect(o.tools == ["settings"], "only one settings window", o)),
         // Cancel: the draft is thrown away
-        Step::SettingsEdit(Box::new(|s, _| s.title_bar_mode = TitleBarMode::Basic)),
+        Step::SettingsEdit(Box::new(|s, _| s.title_bar_mode = TitleBarMode::Name)),
         Step::ToolButton("settings", "cancel"),
-        check(|o| {
+        check(move |o| {
             expect(
-                o.tools.is_empty() && o.titles == ["a.png", "c.png"],
+                o.tools.is_empty() && o.titles == full(["a", "c"]),
                 "cancel changes nothing",
                 o,
             )
@@ -73,13 +75,19 @@ fn main() {
         Step::Do(Action::Options),
         Step::WaitIdle,
         Step::SettingsEdit(Box::new(|s, keys| {
-            s.title_bar_mode = TitleBarMode::Basic;
+            s.title_bar_mode = TitleBarMode::Name;
             s.bg_color = [200, 30, 40];
             keys.insert("nextfile".into(), vec!["Space".into()]);
         })),
         Step::ToolButton("settings", "apply"),
         Step::WaitIdle,
-        check(|o| expect(o.titles == ["rView", "rView"], "title mode in both windows", o)),
+        check(|o| {
+            expect(
+                o.titles == ["rView - a.png", "rView - c.png"],
+                "title mode in both windows",
+                o,
+            )
+        }),
         check(|o| expect(o.tools == ["settings"], "Apply keeps the window open", o)),
         Step::Focus(0),
         corner([200, 30, 40]),
@@ -88,7 +96,7 @@ fn main() {
         check(move |o| {
             let text = std::fs::read_to_string(&sf1).unwrap_or_default();
             expect(
-                text.contains("bgcolor = \"#c81e28\"") && text.contains("titlebarmode = 0"),
+                text.contains("bgcolor = \"#c81e28\"") && text.contains("titlebarmode = 1"),
                 "settings.toml written",
                 o,
             )
@@ -141,14 +149,14 @@ fn main() {
         Step::Check(Box::new(move |_| {
             let text = std::fs::read_to_string(&sf2).unwrap_or_default();
             let text = text
-                .replace("titlebarmode = 0", "titlebarmode = 1")
+                .replace("titlebarmode = 1", "titlebarmode = 3")
                 .replace("#c81e28", "#102030");
             std::fs::write(&sf2, text).map_err(|e| e.to_string())
         })),
         Step::Event(winit::event::WindowEvent::Focused(true)),
         Step::WaitIdle,
-        check(|o| {
-            expect(o.titles == ["b.png", "c.png"], "reloaded from the file", o)?;
+        check(move |o| {
+            expect(o.titles == full(["b", "c"]), "reloaded from the file", o)?;
             expect(o.settings.bg_color == [0x10, 0x20, 0x30], "colour from the file", o)
         }),
         corner([0x10, 0x20, 0x30]),

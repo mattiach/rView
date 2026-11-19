@@ -58,7 +58,7 @@ fn main() {
     let steps = vec![
         Step::WaitIdle,
         check(|o| {
-            (o.image_size == Some((400, 200)) && o.title == "quadrants.png" && o.error.is_none())
+            (o.image_size == Some((400, 200)) && o.title == "rView - quadrants.png" && o.error.is_none())
                 .then_some(())
                 .ok_or(format!("after open: {o:?}"))
         }),
@@ -99,6 +99,7 @@ fn main() {
 fn rview_settings_no_resize() -> rv_core::settings::Settings {
     rv_core::settings::Settings {
         window_resize_mode: rv_core::settings::WindowResizeMode::Never,
+        title_bar_mode: rv_core::settings::TitleBarMode::Name,
         ..Default::default()
     }
 }

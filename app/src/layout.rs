@@ -40,36 +40,14 @@ pub fn format_bytes(n: u64) -> String {
     format!("{v:.2} {}", UNITS[u])
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TitleInfo<'a> {
-    pub name: Option<&'a str>,
-    /// (0-based index, count) in the folder.
-    pub index: Option<(usize, usize)>,
-    pub size: Option<(u32, u32)>,
-    pub bytes: Option<u64>,
-}
-
-/// TitleBarMode: 0 "rView"; 1 name; 2 "i/N - name"; 3 "i/N - name - WxH - size - rView".
-/// Parts that aren't known (no folder yet, decode error) are left out.
-pub fn title(mode: TitleBarMode, t: &TitleInfo) -> String {
+/// "rView - name - size" (Full) or "rView - name" (Name); "rView" alone with nothing open.
+/// The size is left out while it isn't known (decode error).
+pub fn title(mode: TitleBarMode, name: Option<&str>, bytes: Option<u64>) -> String {
     const APP: &str = "rView";
-    let Some(name) = t.name else { return APP.into() };
-    let pos = t.index.map(|(i, n)| format!("{}/{n} - ", i + 1)).unwrap_or_default();
-    match mode {
-        TitleBarMode::Basic => APP.into(),
-        TitleBarMode::Minimal => name.into(),
-        TitleBarMode::Practical => format!("{pos}{name}"),
-        TitleBarMode::Verbose => {
-            let mut s = format!("{pos}{name}");
-            if let Some((w, h)) = t.size {
-                s.push_str(&format!(" - {w}x{h}"));
-            }
-            if let Some(b) = t.bytes {
-                s.push_str(&format!(" - {}", format_bytes(b)));
-            }
-            s.push_str(&format!(" - {APP}"));
-            s
-        }
+    let Some(name) = name else { return APP.into() };
+    match (mode, bytes) {
+        (TitleBarMode::Full, Some(b)) => format!("{APP} - {name} - {}", format_bytes(b)),
+        _ => format!("{APP} - {name}"),
     }
 }
 
@@ -134,28 +112,11 @@ mod tests {
 
     #[test]
     fn titles_in_all_modes() {
-        let t = TitleInfo {
-            name: Some("cat.jpg"),
-            index: Some((2, 10)),
-            size: Some((4000, 3000)),
-            bytes: Some(2_621_440),
-        };
-        assert_eq!(title(TitleBarMode::Basic, &t), "rView");
-        assert_eq!(title(TitleBarMode::Minimal, &t), "cat.jpg");
-        assert_eq!(title(TitleBarMode::Practical, &t), "3/10 - cat.jpg");
-        assert_eq!(
-            title(TitleBarMode::Verbose, &t),
-            "3/10 - cat.jpg - 4000x3000 - 2.50 MiB - rView"
-        );
-        // nothing open
-        assert_eq!(title(TitleBarMode::Verbose, &TitleInfo::default()), "rView");
-        // decode error / folder not scanned yet: unknown parts are left out
-        let e = TitleInfo {
-            name: Some("bad.png"),
-            ..Default::default()
-        };
-        assert_eq!(title(TitleBarMode::Practical, &e), "bad.png");
-        assert_eq!(title(TitleBarMode::Verbose, &e), "bad.png - rView");
+        let (name, bytes) = (Some("cat.jpg"), Some(2_621_440));
+        assert_eq!(title(TitleBarMode::Full, name, bytes), "rView - cat.jpg - 2.50 MiB");
+        assert_eq!(title(TitleBarMode::Name, name, bytes), "rView - cat.jpg");
+        assert_eq!(title(TitleBarMode::Full, None, None), "rView");
+        assert_eq!(title(TitleBarMode::Full, Some("bad.png"), None), "rView - bad.png");
     }
 
     #[test]

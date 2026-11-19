@@ -138,7 +138,7 @@ fn main() {
     steps.push(Step::Event(WindowEvent::DroppedFile(c.clone())));
     steps.push(Step::WaitIdle);
     steps.push(check(|o| {
-        let ok = o.windows == 2 && o.titles == ["b.png", "c.png"];
+        let ok = o.windows == 2 && o.titles == ["rView - b.png", "rView - c.png"];
         ok.then_some(())
             .ok_or(format!("drop of 2 files: {} windows {:?}", o.windows, o.titles))
     }));
@@ -148,13 +148,14 @@ fn main() {
     steps.push(Step::Event(WindowEvent::DroppedFile(c.clone())));
     steps.push(Step::WaitIdle);
     steps.push(check(|o| {
-        let ok = o.windows == 2 && o.titles == ["c.png", "c.png"];
+        let ok = o.windows == 2 && o.titles == ["rView - c.png", "rView - c.png"];
         ok.then_some(())
             .ok_or(format!("second drop: {} windows {:?}", o.windows, o.titles))
     }));
 
     let settings = rv_core::settings::Settings {
         window_resize_mode: rv_core::settings::WindowResizeMode::Never,
+        title_bar_mode: rv_core::settings::TitleBarMode::Name,
         ..Default::default()
     };
     let r = run(Config {

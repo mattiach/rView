@@ -58,7 +58,7 @@ impl Content {
     fn size(&self) -> (f64, f64, bool) {
         match self {
             Content::Settings(_) => (680.0, 600.0, true),
-            Content::Welcome(_) => (500.0, 360.0, false),
+            Content::Welcome(_) => (500.0, 420.0, false),
             Content::Update(_) => (540.0, 440.0, true),
         }
     }

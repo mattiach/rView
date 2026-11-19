@@ -48,12 +48,10 @@ int_enum!(ScrollZoom {
     Scroll = 2,
 });
 
-// Basic "rView", Minimal file name, Practical "i/N - name", Verbose "i/N - name - WxH - size - rView".
+// Name "rView - name", Full "rView - name - size".
 int_enum!(TitleBarMode {
-    Basic = 0,
-    Minimal = 1,
-    Practical = 2,
-    Verbose = 3,
+    Name = 1,
+    Full = 3,
 });
 
 int_enum!(WindowResizeMode {
@@ -265,7 +263,7 @@ impl Default for Settings {
         Settings {
             bg_color_enabled: true,
             bg_color: [0x20, 0x20, 0x20],
-            title_bar_mode: TitleBarMode::Minimal,
+            title_bar_mode: TitleBarMode::Full,
             window_resize_mode: WindowResizeMode::WhenLaunching,
             min_window_resized_percentage: 20,
             max_window_resized_percentage: 70,
@@ -414,7 +412,7 @@ mod tests {
     fn round_trip_and_qt_key_names() {
         let s = Settings {
             bg_color: [0x12, 0xab, 0xff],
-            title_bar_mode: TitleBarMode::Verbose,
+            title_bar_mode: TitleBarMode::Name,
             after_delete: AfterDelete::MoveBack,
             markup: MarkupSettings {
                 metadata_preset: MetadataPreset::StripAll,
@@ -424,7 +422,7 @@ mod tests {
         };
         let text = s.to_toml();
         assert!(text.contains("bgcolor = \"#12abff\""), "{text}");
-        assert!(text.contains("titlebarmode = 3"), "enums as integers: {text}");
+        assert!(text.contains("titlebarmode = 1"), "enums as integers: {text}");
         assert!(text.contains("afterdelete = 0"));
         assert!(text.contains("[markup]") && text.contains("metadatapreset = \"strip-all\""));
         let (back, warnings) = Settings::from_toml(&text);

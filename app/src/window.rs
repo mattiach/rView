@@ -1,7 +1,7 @@
 //! One viewer window: surface, egui, current image, view state and input mapping.
 
 use crate::actions::{Action, EnableState};
-use crate::layout::{self, FitInput, TitleInfo};
+use crate::layout::{self, FitInput};
 use crate::menus::{Menus, Toggles};
 use crate::render::{self, Globals, Gpu, GpuImage};
 use crate::ui;
@@ -245,7 +245,7 @@ impl ViewerWindow {
             last_click: None,
             dropped: 0,
             drop_done: false,
-            title_mode: TitleBarMode::Minimal,
+            title_mode: TitleBarMode::Full,
             menus: None,
             resize_pending: false,
             placement_restored: false,
@@ -297,14 +297,11 @@ impl ViewerWindow {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy());
-        let index = self.index.zip(self.folder.as_ref().map(|f| f.files.len()));
-        let info = TitleInfo {
-            name: name.as_deref(),
-            index,
-            size: self.image_size,
-            bytes: self.info.as_ref().map(|i| i.file_size),
-        };
-        let t = layout::title(self.title_mode, &info);
+        let t = layout::title(
+            self.title_mode,
+            name.as_deref(),
+            self.info.as_ref().map(|i| i.file_size),
+        );
         // "• " while the Markup document is not saved as a project
         if self.markup.as_ref().is_some_and(|m| m.history.is_dirty()) {
             format!("• {t}")

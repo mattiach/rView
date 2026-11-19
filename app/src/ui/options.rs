@@ -194,10 +194,8 @@ impl Options {
                     "titlebarmode",
                     &mut d.title_bar_mode,
                     &[
-                        (TitleBarMode::Basic, "settings-titlebar-basic"),
-                        (TitleBarMode::Minimal, "settings-titlebar-minimal"),
-                        (TitleBarMode::Practical, "settings-titlebar-practical"),
-                        (TitleBarMode::Verbose, "settings-titlebar-verbose"),
+                        (TitleBarMode::Full, "settings-titlebar-full"),
+                        (TitleBarMode::Name, "settings-titlebar-name"),
                     ],
                 )
             });

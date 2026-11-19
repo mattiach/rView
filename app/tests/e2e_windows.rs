@@ -34,12 +34,11 @@ fn main() {
     let size_of = |i: usize| rview::layout::format_bytes(std::fs::metadata(&files[i].0).unwrap().len());
     let expected: Vec<String> = (0..3)
         .map(|i| {
-            let (w, h) = files[i].1;
             let name = files[i].0.file_name().unwrap().to_string_lossy();
-            format!("{}/3 - {name} - {w}x{h} - {} - rView", i + 1, size_of(i))
+            format!("rView - {name} - {}", size_of(i))
         })
         .collect();
-    let c_title_in_b = format!("3/3 - c.png - 100x100 - {} - rView", size_of(2));
+    let c_title_in_b = format!("rView - c.png - {}", size_of(2));
 
     let exp = expected.clone();
     let steps = vec![
@@ -108,7 +107,7 @@ fn main() {
         }),
     ];
     let settings = Settings {
-        title_bar_mode: TitleBarMode::Verbose,
+        title_bar_mode: TitleBarMode::Full,
         ..Default::default()
     };
     let r = run(Config {

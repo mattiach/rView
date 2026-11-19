@@ -258,6 +258,33 @@ pub fn open_url(url: &str) {
     }
 }
 
+/// The Windows Settings page where the user makes rView their default app, when the installer
+/// registered it (per user or for all users).
+pub fn default_apps_page() -> Option<String> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    [
+        (HKEY_CURRENT_USER, "registeredAppUser"),
+        (HKEY_LOCAL_MACHINE, "registeredAppMachine"),
+    ]
+    .into_iter()
+    .find(|(root, _)| {
+        // SAFETY: constant NUL-terminated names; no data is read back.
+        unsafe {
+            RegGetValueW(
+                *root,
+                windows::core::w!(r"Software\RegisteredApplications"),
+                windows::core::w!("rView"),
+                RRF_RT_REG_SZ,
+                None,
+                None,
+                None,
+            )
+        }
+        .is_ok()
+    })
+    .map(|(_, query)| format!("ms-settings:defaultapps?{query}=rView"))
+}
+
 /// The drive has a Recycle Bin (network shares and some removable drives don't: a "recycle"
 /// there would delete permanently).
 pub fn has_recycle_bin(path: &Path) -> bool {
@@ -358,8 +385,11 @@ pub fn grab_cursor_on_caption(window: &Window) {
     unsafe extern "system" fn proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
         // SAFETY: called by the system with this window's message; a shared system cursor.
         unsafe {
+            // Opening a menu sends HTCAPTION with no mouse message (high word 0) to reset the
+            // cursor to the arrow for the whole menu loop: leave that one to the system.
             if msg == WM_SETCURSOR
                 && (lp.0 & 0xFFFF) as u32 == HTCAPTION
+                && (lp.0 >> 16) & 0xFFFF != 0
                 && let Ok(c) = LoadCursorW(None, IDC_SIZEALL)
             {
                 SetCursor(Some(c));

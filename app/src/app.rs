@@ -2078,9 +2078,7 @@ impl App {
                 self.open_tool(el, Content::Settings(o));
             }
             Action::Welcome => {
-                let w = ui::welcome::Welcome {
-                    update_notifications: self.settings.update_notifications,
-                };
+                let w = ui::welcome::Welcome::new(self.settings.update_notifications);
                 self.open_tool(el, Content::Welcome(w));
             }
             Action::ClearRecents => {
@@ -2201,7 +2199,6 @@ impl App {
             None => None,
         };
         w.folder = Some(f);
-        w.refresh_title(); // i/N is known now (TitleBarMode 2/3)
         let generation = w.generation;
         let preloads = self.preloads(&self.windows[&id]);
         self.loader.set_preloads(client(id), generation, preloads);
@@ -2597,9 +2594,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // Welcome at the first start (only with a real state file: not in tests)
         if self.state_path.is_some() && self.state.first_launch && !self.cfg.measure_startup {
-            let w = ui::welcome::Welcome {
-                update_notifications: self.settings.update_notifications,
-            };
+            let w = ui::welcome::Welcome::new(self.settings.update_notifications);
             self.open_tool(el, Content::Welcome(w));
         } else {
             self.maybe_check_updates();
