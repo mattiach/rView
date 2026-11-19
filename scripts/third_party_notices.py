@@ -20,7 +20,7 @@ EMBEDDED = {"epaint_default_fonts": "fonts"}
 
 
 def cargo(*args: str) -> str:
-    return subprocess.run(["cargo", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+    return subprocess.run(["cargo", "--color", "never", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
 
 
 def shipped() -> set[tuple[str, str]]:
