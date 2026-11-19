@@ -8,18 +8,26 @@ build.
 
 - Viewer: GPU rendering (wgpu/DX12), reduced previews of large JPEGs, preloading of the neighbours, folder
   navigation (natural sort, loop, random), slideshow, animations (GIF, APNG, WebP, JPEG XL), colour management
-  (ICC, Display P3), multiple windows, fullscreen, drag & drop, Open URL, Copy/Paste, Rename, Delete with undo
+  (ICC, Display P3), multiple windows, fullscreen, drag & drop, Open URL, Copy/Paste (also Base64 images and data URLs: Paste or Open URL opens them, Copy as
+  Base64 copies the file on screen), Rename, Delete with undo
   (Recycle Bin), Open With, File Info, Settings, custom shortcuts, English UI (drop-in
   translations in `assets/i18n`).
 - Formats: JPEG, PNG/APNG, GIF, WebP, TIFF, BMP, ICO/CUR, ICNS, TGA, PNM, QOI, HDR, EXR, DDS, JPEG XL,
   SVG/SVGZ (re-rasterised when zoomed in), WBMP, XBM, XPM; through the Windows codecs HEIC/HEIF, AVIF, JPEG XR
   and camera RAW; `.rvm` projects.
-- Markup (Ctrl+Shift+A): non-destructive crop, rotate/flip, rectangle, ellipse, line, arrow (straight or
+- Markup (Ctrl+Shift+A): non-destructive crop (standard, social media and custom aspect ratios), rotate/flip,
+  image adjustments (exposure, brightness, contrast, saturation, temperature, hue, sharpness), watermarks
+  (an image placed, moved, resized, rotated, with opacity; the last two remembered), before/after comparison
+  (a draggable divider, `\`), rectangle, ellipse, line, arrow (straight or
   curved), pen, highlighter, text (embedded Lato or installed fonts), loupe, redactions (Solid: an opaque
   cover, the only reliable way to hide data; Blur and Pixelate: visual effects, not a protection), selection
   with handles, undo/redo. Save Project (`.rvm`, safe to open from anyone), Export (PNG/JPEG/WebP/TIFF/BMP, metadata presets,
   previews always stripped), Overwrite Original (backup in the Recycle Bin), Copy. A `.rvm` project contains
   the whole original image, including what is under its redactions: keep it private and share an export.
+- Convert (Tools menu), Export and Save Frame As: output format and JPEG quality, transparency kept or replaced
+  with a background colour, resolution (72/96/150/300 or custom DPI, written to the file without resampling),
+  resize (pixels with or without proportions, percentage, or print size in cm/in at the chosen DPI), metadata
+  presets.
 
 How it works inside: [ARCHITECTURE.md](ARCHITECTURE.md).
 Measurements: [docs/performance.md](docs/performance.md). Library and platform behaviours checked by tests:
@@ -80,7 +88,7 @@ cargo test -p rv-core --test capabilities -- --nocapture --test-threads 1   # pl
 
 - Real-file fixtures are not in the repository: `python core/tests/fixtures/fetch_fixtures.py` downloads them
   (SHA-256 checked); without them those tests print `SKIPPED`. See `core/tests/fixtures/README.md`.
-- `windows_integration` and `e2e_lifecycle` replace the clipboard content; `windows_integration` passes a file
+- `windows_integration`, `e2e_lifecycle` and `e2e_base64` replace the clipboard content; `windows_integration` passes a file
   through the Recycle Bin (restored).
 - `uia_native` drives the native UI through UI Automation (menu bar, context menu, Delete confirmation, Open
   dialog, Settings): its windows and dialogs are **not** cloaked, they appear on screen for about half a

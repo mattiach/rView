@@ -152,13 +152,37 @@ pub fn download(url: &str, cancel: &AtomicBool, mut progress: impl FnMut(u64, Op
         progress(data.len() as u64, total);
     }
     let ext = extension(url, content_type.as_deref(), &data[..data.len().min(1024)]);
-    let path = temp_path(&std::env::temp_dir(), &ext);
+    save_temp(&data, &ext)
+}
+
+/// `data` written to a new temporary file (removed again if the write fails).
+pub fn save_temp(data: &[u8], ext: &str) -> Result<PathBuf, String> {
+    let path = temp_path(&std::env::temp_dir(), ext);
     let mut f = std::fs::File::create_new(&path).map_err(|e| e.to_string())?;
-    f.write_all(&data).map_err(|e| {
+    f.write_all(data).map_err(|e| {
         let _ = std::fs::remove_file(&path);
         e.to_string()
     })?;
     Ok(path)
+}
+
+/// Base64 or a data URL (Paste, Open URL) decoded into a temporary file with the extension of
+/// its content; an unknown content is refused, nothing is written.
+pub fn save_base64(text: &str) -> Result<PathBuf, String> {
+    let (data, mime) = rv_core::dataurl::decode(text).map_err(|e| e.to_string())?;
+    let ext = extension("", mime.as_deref(), &data[..data.len().min(1024)]);
+    if ext == "tmp" {
+        return Err(crate::i18n::t("base64-not-image"));
+    }
+    save_temp(&data, &ext)
+}
+
+/// The start of a long text, for a message.
+pub fn excerpt(s: &str) -> String {
+    match s.char_indices().nth(80) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -193,5 +217,30 @@ mod tests {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("rView.") && name.ends_with(".png") && name.len() == "rView.xxxxxx.png".len());
         assert!(!p.exists());
+        assert_eq!(excerpt("short"), "short");
+        assert_eq!(excerpt(&"é".repeat(100)).chars().count(), 81);
+    }
+
+    #[test]
+    fn base64_to_temp_file() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        // the content decides: a PNG labelled as JPEG is saved as .png
+        let url = rv_core::dataurl::encode(&png, Format::Png)
+            .unwrap()
+            .replace("image/png", "image/jpeg");
+        let p = save_base64(&url).unwrap();
+        assert_eq!(p.extension().unwrap(), "png");
+        assert_eq!(std::fs::read(&p).unwrap(), png);
+        std::fs::remove_file(&p).unwrap();
+        // not an image: refused, and invalid Base64 reports why
+        assert!(save_base64("data:text/plain;base64,SGVsbG8=").is_err());
+        assert!(
+            save_base64("data:image/png;base64,***")
+                .unwrap_err()
+                .contains("not valid Base64")
+        );
     }
 }

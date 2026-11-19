@@ -150,7 +150,7 @@ pub fn source_frame(bytes: &[u8], format: Format, n: usize) -> Result<(SourceFra
 }
 
 /// Frame `n` encoded with the export options, source ICC profile kept (Save Frame As).
-/// Returns the file's bytes and the frame size.
+/// Returns the file's bytes and their size (the frame's, or the resized one).
 pub fn export_frame(
     bytes: &[u8],
     format: Format,
@@ -165,7 +165,8 @@ pub fn export_frame(
         icc: icc.map(Into::into),
     };
     let out = crate::export::encode(&flat, None, o).map_err(|e| e.to_string())?;
-    Ok((out, f.w, f.h))
+    let (w, h) = o.out_size(f.w, f.h);
+    Ok((out, w, h))
 }
 
 /// Frame ready for upload (view space, premultiplied).

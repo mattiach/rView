@@ -48,6 +48,8 @@ pub enum Action {
     Export,
     OverwriteOriginal,
     Redo,
+    Convert,
+    CopyBase64,
 }
 
 /// When an action can run.
@@ -63,6 +65,10 @@ pub enum Enable {
     InMarkup,
     /// In Markup, with an original in an exportable format, not a project.
     Overwritable,
+    /// Editable, outside Markup (in Markup, Export converts the document).
+    Convertible,
+    /// An image on screen, outside Markup (an action on its file, not on the document).
+    FileOnScreen,
 }
 
 /// Menu text comes from the i18n files: message `action-<key>` (see `name`).
@@ -142,6 +148,8 @@ pub const ACTIONS: &[(Action, ActionInfo)] = &[
     (Action::Export,               a("export",               &["Ctrl+Shift+S"], InMarkup)),
     (Action::OverwriteOriginal,    a("overwriteoriginal",    &[], Overwritable)),
     (Action::Redo,                 a("redo",                 &["Ctrl+Y", "Ctrl+Shift+Z"], InMarkup)),
+    (Action::Convert,              a("convert",              &[], Convertible)),
+    (Action::CopyBase64,           a("copybase64",           &[], FileOnScreen)),
 ];
 
 pub fn info(a: Action) -> &'static ActionInfo {
@@ -178,6 +186,8 @@ pub fn is_enabled(a: Action, s: &EnableState) -> bool {
         NeedsEditable => s.editable,
         InMarkup => s.in_markup,
         Overwritable => s.in_markup && s.overwritable,
+        Convertible => s.editable && !s.in_markup,
+        FileOnScreen => s.has_image && !s.in_markup,
     }
 }
 
@@ -236,6 +246,9 @@ mod tests {
             ..image
         };
         assert!(!is_enabled(Action::Redo, &image) && is_enabled(Action::Redo, &markup));
+        // Copy as Base64: the file on screen, animations too, not the Markup document
+        assert!(!is_enabled(Action::CopyBase64, &none) && is_enabled(Action::CopyBase64, &anim));
+        assert!(is_enabled(Action::CopyBase64, &image) && !is_enabled(Action::CopyBase64, &markup));
         // Save Project / Export in Markup; Overwrite Original only for exportable originals
         assert!(!is_enabled(Action::SaveProject, &image) && !is_enabled(Action::Export, &image));
         assert!(is_enabled(Action::SaveProject, &markup) && is_enabled(Action::Export, &markup));
@@ -245,5 +258,9 @@ mod tests {
             ..markup
         };
         assert!(is_enabled(Action::OverwriteOriginal, &jpeg));
+        // Convert: a static image outside Markup
+        assert!(!is_enabled(Action::Convert, &none) && is_enabled(Action::Convert, &image));
+        assert!(!is_enabled(Action::Convert, &anim), "not for animations");
+        assert!(!is_enabled(Action::Convert, &markup), "Markup has Export");
     }
 }

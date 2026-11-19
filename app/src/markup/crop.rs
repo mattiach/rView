@@ -1,6 +1,7 @@
 //! Crop tool: a rectangle with 8 handles over the whole image, aspect presets (Free,
 //! Original, 1:1, 4:3, 3:2, 16:9; X swaps them), Enter applies, Esc cancels. Non-destructive: the
 //! draft starts from the document's crop, and Reset goes back to the whole image.
+//! Social media proportions and a custom ratio lock the same way.
 
 use super::select::{Handle, resize};
 use rv_core::edit::{DocState, PointF, RectF, RectU};
@@ -22,6 +23,28 @@ pub const PRESETS: &[(&str, Aspect)] = &[
     ("markup-crop-16-9", Aspect::Ratio(16, 9)),
 ];
 
+/// Social media proportions (no pixel sizes: the platforms change them, the export keeps the
+/// image's resolution).
+pub const SOCIAL: &[(&str, Aspect)] = &[
+    ("markup-crop-x-post", Aspect::Ratio(16, 9)),
+    ("markup-crop-x-header", Aspect::Ratio(3, 1)),
+    ("markup-crop-facebook-post", Aspect::Ratio(191, 100)),
+    ("markup-crop-facebook-story", Aspect::Ratio(9, 16)),
+    ("markup-crop-instagram-square", Aspect::Ratio(1, 1)),
+    ("markup-crop-instagram-portrait", Aspect::Ratio(4, 5)),
+    ("markup-crop-instagram-landscape", Aspect::Ratio(191, 100)),
+    ("markup-crop-instagram-story", Aspect::Ratio(9, 16)),
+    ("markup-crop-youtube-thumbnail", Aspect::Ratio(16, 9)),
+    ("markup-crop-linkedin-post", Aspect::Ratio(191, 100)),
+    ("markup-crop-linkedin-banner", Aspect::Ratio(4, 1)),
+];
+
+/// Message id of the custom ratio entry.
+pub const CUSTOM: &str = "markup-crop-custom";
+
+/// Largest term of a custom ratio.
+pub const CUSTOM_MAX: u32 = 10_000;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Grab {
     Handle(Handle),
@@ -35,6 +58,8 @@ pub struct CropDraft {
     /// Image space.
     pub rect: RectF,
     pub aspect: Aspect,
+    /// Message id of the entry picked (`PRESETS`, `SOCIAL` or `CUSTOM`): several share a ratio.
+    pub preset: &'static str,
     /// X: width and height of the ratio swapped.
     pub inverted: bool,
     pub drag: Option<(Grab, RectF, PointF)>,
@@ -51,6 +76,7 @@ impl CropDraft {
                 h: r.h as f32,
             },
             aspect: Aspect::Free,
+            preset: PRESETS[0].0,
             inverted: false,
             drag: None,
         }
@@ -74,6 +100,22 @@ impl CropDraft {
     pub fn set_aspect(&mut self, doc: &DocState, a: Aspect) {
         self.aspect = a;
         self.rect = self.constrained(doc, self.rect, Grab::Move);
+    }
+
+    /// A preset by message id (`PRESETS` or `SOCIAL`); false if there is none.
+    pub fn pick(&mut self, doc: &DocState, id: &str) -> bool {
+        let Some(&(id, a)) = PRESETS.iter().chain(SOCIAL).find(|(i, _)| *i == id) else {
+            return false;
+        };
+        self.preset = id;
+        self.set_aspect(doc, a);
+        true
+    }
+
+    /// A ratio typed by the user, each term clamped to 1–`CUSTOM_MAX`.
+    pub fn set_custom(&mut self, doc: &DocState, w: u32, h: u32) {
+        self.preset = CUSTOM;
+        self.set_aspect(doc, Aspect::Ratio(w.clamp(1, CUSTOM_MAX), h.clamp(1, CUSTOM_MAX)));
     }
 
     pub fn invert(&mut self, doc: &DocState) {
@@ -126,7 +168,8 @@ impl CropDraft {
             let (w, h) = if r.w / q > r.h { (r.w, r.w / q) } else { (r.h * q, r.h) };
             // too big for the image: the largest rectangle of that aspect that fits
             let s = (iw / w).min(ih / h).min(1.0);
-            let (w, h) = (w * s, h * s);
+            // capped: w·(iw/w) can round above iw
+            let (w, h) = ((w * s).min(iw), (h * s).min(ih));
             r = match grab {
                 Grab::Handle(Handle::Corner(0)) => RectF {
                     x: r.x + r.w - w,
@@ -253,5 +296,88 @@ mod tests {
         d.inverted = false;
         d.set_aspect(&turned, Aspect::Original);
         assert!((d.ratio(&turned).unwrap() - 2.0).abs() < 1e-6);
+    }
+
+    /// The stored crop's width / height (whole pixels).
+    fn stored(d: &CropDraft, doc: &DocState) -> f32 {
+        let c = d.to_crop(doc).unwrap_or(doc.region());
+        c.w as f32 / c.h as f32
+    }
+
+    #[test]
+    fn every_preset_locks_its_ratio() {
+        let doc = DocState::new(4000, 3000);
+        let ids: Vec<&str> = PRESETS.iter().chain(SOCIAL).map(|(i, _)| *i).collect();
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "message ids are unique");
+        for (id, a) in PRESETS.iter().chain(SOCIAL) {
+            let mut d = CropDraft::new(&doc);
+            assert!(d.pick(&doc, id), "{id}");
+            assert_eq!((d.preset, d.aspect), (*id, *a));
+            let r = &d.rect;
+            assert!(
+                r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= 4000.0 && r.y + r.h <= 3000.0,
+                "{id} inside"
+            );
+            if let Aspect::Ratio(w, h) = a {
+                let q = *w as f32 / *h as f32;
+                // the largest rectangle of that ratio: one side is the image's
+                assert!(r.w == 4000.0 || r.h == 3000.0, "{id} as large as it fits");
+                assert!((stored(&d, &doc) - q).abs() / q < 0.002, "{id}: {}", stored(&d, &doc));
+                // swapped: the inverse ratio
+                d.invert(&doc);
+                assert!((stored(&d, &doc) - 1.0 / q).abs() * q < 0.002, "{id} swapped");
+            }
+        }
+        // the same ratio under two names keeps the name picked
+        let mut d = CropDraft::new(&doc);
+        d.pick(&doc, "markup-crop-instagram-square");
+        assert_eq!(d.preset, "markup-crop-instagram-square");
+        assert_eq!(d.aspect, Aspect::Ratio(1, 1));
+        assert!(!d.pick(&doc, "nope"), "unknown id");
+        assert_eq!(d.preset, "markup-crop-instagram-square", "unchanged");
+    }
+
+    /// Fitting a ratio could round a side above the image's and panic in `clamp`.
+    #[test]
+    fn locked_ratios_fit_every_size() {
+        let sizes = [1, 2, 3, 7, 99, 333, 641, 800, 1199, 1200, 3001, 4001, 7919];
+        for &w in &sizes {
+            for &h in &sizes {
+                let doc = DocState::new(w, h);
+                for (id, _) in PRESETS.iter().chain(SOCIAL) {
+                    let mut d = CropDraft::new(&doc);
+                    d.pick(&doc, id);
+                    d.invert(&doc);
+                    let r = d.rect;
+                    let inside = r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= w as f32 && r.y + r.h <= h as f32;
+                    assert!(inside, "{id} on {w}x{h}: {r:?}");
+                    assert!(d.to_crop(&doc).is_none_or(|c| c.x + c.w <= w && c.y + c.h <= h));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn custom_ratio() {
+        let doc = DocState::new(1000, 1000);
+        let mut d = CropDraft::new(&doc);
+        d.set_custom(&doc, 16, 9);
+        assert_eq!((d.preset, d.aspect), (CUSTOM, Aspect::Ratio(16, 9)), "stays custom");
+        assert!((stored(&d, &doc) - 16.0 / 9.0).abs() < 0.01);
+        d.set_custom(&doc, 0, 99_999);
+        assert_eq!(d.aspect, Aspect::Ratio(1, CUSTOM_MAX), "terms clamped");
+        assert!(
+            d.to_crop(&doc).is_some_and(|c| c.w >= 1 && c.h == 1000),
+            "thin but valid"
+        );
+        // on a document turned 90°, the ratio is as seen on screen
+        let turned = doc.apply(&Edit::Rotate { quarter_turns: 1 }).unwrap();
+        let mut d = CropDraft::new(&turned);
+        d.set_custom(&turned, 2, 1);
+        let c = d.to_crop(&turned).unwrap();
+        assert_eq!(turned.orient.apply_size(c.w, c.h), (1000, 500), "2:1 on screen");
     }
 }

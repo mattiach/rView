@@ -156,7 +156,8 @@ pub fn frame(doc: &DocState, id: ObjectId) -> Option<(RectF, f32)> {
         ObjRef::Shape(i) => match &doc.shapes[i].geom {
             Geom::Rect { rect, rotation, .. }
             | Geom::Ellipse { rect, rotation }
-            | Geom::Text { rect, rotation, .. } => Some((*rect, *rotation)),
+            | Geom::Text { rect, rotation, .. }
+            | Geom::Image { rect, rotation, .. } => Some((*rect, *rotation)),
             // the square around the circle (no rotation)
             Geom::Loupe { center, radius, .. } => Some((
                 RectF {
@@ -199,6 +200,11 @@ pub fn set_frame(doc: &DocState, id: ObjectId, rect: RectF, rotation: f32) -> Op
                     corner_radius: *corner_radius,
                 },
                 Geom::Ellipse { .. } => Geom::Ellipse { rect, rotation },
+                Geom::Image { image, .. } => Geom::Image {
+                    rect,
+                    rotation,
+                    image: image.clone(),
+                },
                 // the handles set the wrapping width; the height follows the text
                 Geom::Text { text, font, align, .. } => text_geom(rect, rotation, text, font, *align),
                 Geom::Loupe { zoom, .. } => Geom::Loupe {

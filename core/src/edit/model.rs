@@ -120,6 +120,13 @@ pub enum Geom {
         radius: f32,
         zoom: f32,
     },
+    /// Pixels (a watermark, a logo) stretched over `rect`, rotated about its centre; only the
+    /// style's opacity applies.
+    Image {
+        rect: RectF,
+        rotation: f32,
+        image: super::picture::ImageRef,
+    },
 }
 
 /// Font of a text shape (by family name; a family missing on another PC falls back to Lato).
@@ -161,6 +168,7 @@ pub enum ShapeKind {
     Highlight,
     Text,
     Loupe,
+    Image,
 }
 
 impl Geom {
@@ -174,6 +182,7 @@ impl Geom {
             Geom::Highlight { .. } => ShapeKind::Highlight,
             Geom::Text { .. } => ShapeKind::Text,
             Geom::Loupe { .. } => ShapeKind::Loupe,
+            Geom::Image { .. } => ShapeKind::Image,
         }
     }
 }
@@ -204,6 +213,13 @@ impl Style {
                 fill: None,
                 width: 3.0,
                 opacity: 1.0,
+            },
+            // a watermark: see-through by default
+            ShapeKind::Image => Style {
+                stroke: None,
+                fill: None,
+                width: 1.0,
+                opacity: 0.5,
             },
             // text colour = stroke; the width is not used
             ShapeKind::Text => Style {
@@ -271,6 +287,10 @@ pub struct DocState {
     pub shapes: Vec<Arc<Shape>>,
     /// Greater than every ID in `shapes` and `redactions`.
     pub next_id: u64,
+    /// Applied to the source pixels, below the redactions and the shapes. Not written when
+    /// neutral (a project without adjustments stays readable by older versions).
+    #[serde(default, skip_serializing_if = "super::adjust::Adjustments::is_neutral")]
+    pub adjust: super::adjust::Adjustments,
 }
 
 /// Where an ID lives (result of `DocState::find`).
@@ -293,6 +313,7 @@ impl DocState {
             redactions: Vec::new(),
             shapes: Vec::new(),
             next_id: 1,
+            adjust: Default::default(),
         }
     }
 

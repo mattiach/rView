@@ -41,7 +41,7 @@ fn rect_path(r: &RectF, corner: f32) -> Option<Path> {
     pb.finish()
 }
 
-fn rotation_about(r: &RectF, rotation: f32) -> Transform {
+pub(crate) fn rotation_about(r: &RectF, rotation: f32) -> Transform {
     let c = r.center();
     Transform::from_rotate_at(rotation.to_degrees(), c.x, c.y)
 }
@@ -212,6 +212,8 @@ pub fn shape_paths(shape: &Shape, res_scale: f32) -> Vec<(Path, Ink)> {
                 Ink::Stroke,
             );
         }
+        // the pixels are drawn by `render`; no outline
+        Geom::Image { .. } => {}
         // the magnified content is drawn by `render` (it needs the image); here the outline
         Geom::Loupe { center, radius, .. } => {
             if st.stroke.is_some() {
@@ -248,7 +250,7 @@ pub fn shape_paths(shape: &Shape, res_scale: f32) -> Vec<(Path, Ink)> {
 
 /// Axis-aligned bounds in image space (including the stroke; a text: its whole box).
 pub fn bounds(shape: &Shape) -> Option<RectF> {
-    if let Geom::Text { rect, rotation, .. } = &shape.geom {
+    if let Geom::Text { rect, rotation, .. } | Geom::Image { rect, rotation, .. } = &shape.geom {
         return Some(area_bounds(&Area::Rect {
             rect: *rect,
             rotation: *rotation,
@@ -354,7 +356,7 @@ pub fn hit(shape: &Shape, p: PointF, tol: f32) -> bool {
         }
         Geom::Loupe { center, radius, .. } => (p.x - center.x).hypot(p.y - center.y) <= radius + half,
         // anywhere in its box
-        Geom::Text { rect, rotation, .. } => {
+        Geom::Text { rect, rotation, .. } | Geom::Image { rect, rotation, .. } => {
             let (x, y) = local(p, rect, *rotation);
             x.abs() <= rect.w / 2.0 + tol && y.abs() <= rect.h / 2.0 + tol
         }

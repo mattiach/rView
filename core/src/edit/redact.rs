@@ -46,8 +46,9 @@ pub struct Patch {
 
 const BUDGET: usize = 256 << 20;
 
-/// Patches by key: the key covers the redaction, its read area and the keys of the earlier
-/// patches it reads, so a change recomputes only what depends on it.
+/// Patches by key: the key covers the redaction, its read area, the keys of the earlier patches
+/// it reads and the adjustments of the pixels below, so a change recomputes only what depends on
+/// it.
 #[derive(Default)]
 pub struct PatchCache {
     map: HashMap<u64, (Arc<Patch>, u64)>,
@@ -157,8 +158,9 @@ fn intersect(a: RectU, b: RectU) -> Option<RectU> {
     }
 }
 
-fn key_of(r: &Redaction, read: RectU, deps: &[u64]) -> u64 {
+fn key_of(r: &Redaction, read: RectU, deps: &[u64], base: u64) -> u64 {
     let mut s = DefaultHasher::new();
+    base.hash(&mut s);
     let (Area::Rect { rect, rotation } | Area::Ellipse { rect, rotation }) = &r.area;
     matches!(r.area, Area::Ellipse { .. }).hash(&mut s);
     for v in [rect.x, rect.y, rect.w, rect.h, *rotation] {
@@ -175,6 +177,7 @@ fn key_of(r: &Redaction, read: RectU, deps: &[u64]) -> u64 {
 }
 
 /// The patches of the document's redactions, in order (one per redaction that touches the image).
+/// `src` is the document's base: the source with `doc.adjust` applied.
 pub fn patches(
     doc: &DocState,
     w: u32,
@@ -184,6 +187,7 @@ pub fn patches(
     cache: &mut PatchCache,
 ) -> Vec<Arc<Patch>> {
     let mut done: Vec<(u64, Arc<Patch>)> = Vec::new();
+    let base = if doc.adjust.is_neutral() { 0 } else { doc.adjust.key() };
     for r in &doc.redactions {
         let Some(bbox) = pixel_bounds(&r.area, w, h) else {
             continue;
@@ -199,7 +203,7 @@ pub fn patches(
             .filter(|(_, p)| intersect(p.rect, read).is_some())
             .map(|(k, _)| *k)
             .collect();
-        let key = key_of(r, read, &deps);
+        let key = key_of(r, read, &deps, base);
         let patch = match cache.get(key) {
             Some(p) => {
                 cache.hits += 1;

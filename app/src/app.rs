@@ -73,6 +73,22 @@ pub enum UserEvent {
         url: String,
         result: Result<PathBuf, String>,
     },
+    /// A watermark file decoded for Markup's image shape.
+    WatermarkLoaded {
+        window: WindowId,
+        path: PathBuf,
+        result: Result<Arc<rv_core::edit::picture::ImageData>, String>,
+    },
+    /// The recent watermarks with their existence, checked off the UI thread.
+    WatermarksChecked {
+        window: WindowId,
+        list: Vec<(PathBuf, bool)>,
+    },
+    /// Base64 / data URL decoded into a temporary file (Paste, Open URL).
+    Base64Saved {
+        window: WindowId,
+        result: Result<PathBuf, String>,
+    },
     /// Open With apps for `path` (enumerated on a worker 250 ms after the file changed).
     OpenWithList {
         window: WindowId,
@@ -99,6 +115,19 @@ pub enum UserEvent {
     MarkupSource {
         window: WindowId,
         result: Result<MarkupLoad, String>,
+    },
+    /// The original of `window`'s Markup source in view pixels, for the before/after comparison.
+    CompareReady {
+        window: WindowId,
+        source: usize,
+        rgba: Vec<u8>,
+    },
+    /// The adjusted preview of `window`'s Markup source (identified by its pixels' address).
+    AdjustReady {
+        window: WindowId,
+        adjust: rv_core::edit::Adjustments,
+        source: usize,
+        rgba: Vec<u8>,
     },
     /// A sharper raster of the SVG of `window`, for its load `generation`.
     SvgRaster {
@@ -130,6 +159,7 @@ pub enum WriteKind {
     Project,
     Export,
     Overwrite,
+    Convert,
 }
 
 impl From<egui_winit::accesskit_winit::Event> for UserEvent {
@@ -453,14 +483,169 @@ impl App {
     }
 
     /// Paste: files from the clipboard open (first here, the others in new windows); an
-    /// http(s) URL is downloaded like Open URL.
+    /// http(s) URL is downloaded like Open URL; a data URL or Base64 image text is opened.
     fn paste(&mut self, el: &ActiveEventLoop, id: Option<WindowId>) {
         let files = crate::platform::clipboard_files();
         if !files.is_empty() {
             self.open_paths(el, id, files, false);
-        } else if let Some(t) = crate::platform::clipboard_text().filter(|t| ui::openurl::is_url(t)) {
-            self.start_download(id, t.trim().to_string());
+        } else if let Some(t) = crate::platform::clipboard_text() {
+            if ui::openurl::is_url(&t) {
+                self.start_download(id, t.trim().to_string());
+            } else if rv_core::dataurl::is_image_text(&t) {
+                self.open_base64(id, t);
+            }
         }
+    }
+
+    /// The watermark menu: Choose asks for a file, Open decodes it on a worker (then
+    /// `on_watermark_loaded` inserts it), Clear forgets the list.
+    fn watermark(&mut self, id: WindowId, req: crate::markup::WatermarkReq) {
+        use crate::markup::WatermarkReq;
+        let path = match req {
+            WatermarkReq::Clear => {
+                self.state.recent_watermarks.clear();
+                self.save_state();
+                return self.check_watermarks(id);
+            }
+            WatermarkReq::Open(p) => p,
+            WatermarkReq::Choose => {
+                let mut dlg = rfd::FileDialog::new()
+                    .set_title(i18n::plain(&t("markup-watermark")))
+                    .add_filter(t("filter-images"), &dialog_extensions());
+                if let Some(w) = self.windows.get(&id) {
+                    dlg = dlg.set_parent(w.window.as_ref());
+                }
+                let Some(p) = dlg.pick_file() else { return };
+                p
+            }
+        };
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        w.pending_ops += 1;
+        let opts = self.decode_opts;
+        self.spawn(move || {
+            let result = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| {
+                rv_core::edit::picture::ImageData::from_file(&b, rv_core::formats::Format::from_path(&path), &opts)
+            });
+            UserEvent::WatermarkLoaded {
+                window: id,
+                path,
+                result,
+            }
+        });
+    }
+
+    fn on_watermark_loaded(
+        &mut self,
+        id: WindowId,
+        path: PathBuf,
+        result: Result<Arc<rv_core::edit::picture::ImageData>, String>,
+    ) {
+        if let Some(w) = self.windows.get_mut(&id) {
+            w.pending_ops = w.pending_ops.saturating_sub(1);
+        }
+        match result {
+            Ok(data) => {
+                let Some(w) = self.windows.get_mut(&id) else { return };
+                let Some(m) = &mut w.markup else { return };
+                m.insert_image(data);
+                w.refresh_title();
+                w.update_menus();
+                w.window.request_redraw();
+                if self.state.add_watermark(&path) {
+                    self.save_state();
+                }
+            }
+            Err(e) => {
+                // a file that can't be used leaves the list
+                if self.state.forget_watermark(&path) {
+                    self.save_state();
+                }
+                let name = Self::name_of(&path);
+                self.message(
+                    Some(id),
+                    "title-watermark",
+                    tf("markup-watermark-failed", &[("name", &name), ("reason", &e)]),
+                );
+            }
+        }
+        self.check_watermarks(id);
+    }
+
+    /// The Markup window's list of recent watermarks, each file's existence checked on a worker
+    /// (a network share can take seconds).
+    fn check_watermarks(&mut self, id: WindowId) {
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        if w.markup.is_none() {
+            return;
+        }
+        w.pending_ops += 1;
+        let paths = self.state.recent_watermarks.clone();
+        self.spawn(move || UserEvent::WatermarksChecked {
+            window: id,
+            list: paths
+                .into_iter()
+                .map(|p| {
+                    let there = p.is_file();
+                    (p, there)
+                })
+                .collect(),
+        });
+    }
+
+    /// Base64 text decoded on a worker into a temporary file, then opened like a download.
+    fn open_base64(&mut self, id: Option<WindowId>, text: String) {
+        let Some(id) = id.or_else(|| self.current()) else {
+            return;
+        };
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        w.pending_ops += 1;
+        self.spawn(move || UserEvent::Base64Saved {
+            window: id,
+            result: ui::openurl::save_base64(&text),
+        });
+    }
+
+    fn on_base64_saved(&mut self, el: &ActiveEventLoop, id: WindowId, result: Result<PathBuf, String>) {
+        if let Some(w) = self.windows.get_mut(&id) {
+            w.pending_ops = w.pending_ops.saturating_sub(1);
+        }
+        match result {
+            Ok(path) => {
+                self.downloads.push(path.clone());
+                let target = self.empty_window();
+                self.open_paths(el, target, vec![path], false);
+            }
+            Err(e) => self.message(Some(id), "title-base64", tf("base64-failed", &[("reason", &e)])),
+        }
+    }
+
+    /// Copy as Base64: the file on screen, exactly as stored, as a `data:` URL text. Not a
+    /// project: it carries what is under its redactions.
+    fn copy_base64(&mut self, id: WindowId) {
+        let Some(path) = self.image_path(id) else { return };
+        let format = rv_core::formats::Format::from_path(&path);
+        if format == Some(rv_core::formats::Format::Project) {
+            return self.message(Some(id), "title-base64", t("base64-project"));
+        }
+        let w = self.windows.get_mut(&id).unwrap();
+        let format = w.info.as_ref().map(|i| i.format).or(format);
+        w.pending_ops += 1;
+        self.spawn(move || {
+            let result = (|| {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                let format = rv_core::formats::Format::sniff(&bytes).or(format);
+                let text = rv_core::dataurl::encode(&bytes, format.unwrap_or(rv_core::formats::Format::Raw))
+                    .map_err(|e| e.to_string())?;
+                drop(bytes);
+                crate::platform::clipboard_set_text(None, &text)
+            })();
+            UserEvent::OpDone {
+                window: id,
+                title: "title-base64",
+                counted: true,
+                result,
+            }
+        });
     }
 
     fn start_download(&mut self, id: Option<WindowId>, url: String) {
@@ -735,11 +920,18 @@ impl App {
                 w.dialog = None;
                 self.save_frame(id, o, n);
             }
+            DialogOutcome::Convert(o) => {
+                w.dialog = None;
+                self.convert(id, o);
+            }
             DialogOutcome::OpenUrl(url) => {
                 w.dialog = None;
                 if ui::openurl::is_url(&url) {
                     self.start_download(Some(id), url);
+                } else if url.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("data:")) {
+                    self.open_base64(Some(id), url);
                 } else if !url.is_empty() {
+                    let url = ui::openurl::excerpt(&url);
                     self.message(Some(id), "title-openurl", tf("openurl-invalid", &[("url", &url)]));
                 }
             }
@@ -1488,6 +1680,30 @@ impl App {
         }
     }
 
+    /// The adjusted preview on a worker: the base (kept in the source's cache, where the patches
+    /// and the export find it) in view pixels. The window starts one job at a time and the next
+    /// one once it is shown, so the preview catches up with the latest value of a slider.
+    fn spawn_adjust(
+        proxy: &EventLoopProxy<UserEvent>,
+        id: WindowId,
+        space: rv_core::color::ViewSpace,
+        adjust: rv_core::edit::Adjustments,
+        src: rv_core::export::DocSource,
+    ) {
+        let proxy = proxy.clone();
+        std::thread::spawn(move || {
+            let base = src.base(&adjust);
+            let vt = rv_core::color::ViewTransform::new(src.icc.as_deref(), space);
+            let rgba = rv_core::color::finish_view(rv_core::color::rgba8((*base).clone()), &vt);
+            let _ = proxy.send_event(UserEvent::AdjustReady {
+                window: id,
+                adjust,
+                source: Arc::as_ptr(&src.pixels) as usize,
+                rgba,
+            });
+        });
+    }
+
     /// Enter Markup on the image of `id`: a new document of the image's size; the source
     /// (pixels at full precision, original bytes) is decoded again on a worker. A `.rvm` brings its
     /// document and original instead.
@@ -1547,6 +1763,7 @@ impl App {
             })();
             UserEvent::MarkupSource { window: id, result }
         });
+        self.check_watermarks(id);
     }
 
     fn on_markup_source(&mut self, id: WindowId, result: Result<MarkupLoad, String>) {
@@ -1776,7 +1993,12 @@ impl App {
     fn open_export(&mut self, id: WindowId) {
         let Some((m, src)) = self.markup_parts(id) else { return };
         let redactions = !m.doc().redactions.is_empty();
-        let d = ui::export::Export::new(&self.settings.markup, Some(src.format), redactions);
+        let d = ui::export::Export::new(
+            &self.settings.markup,
+            Some(src.format),
+            m.doc().canvas_size(),
+            redactions,
+        );
         let w = self.windows.get_mut(&id).unwrap();
         w.dialog = Some(Dialog::Export(d));
         w.window.request_redraw();
@@ -1802,7 +2024,7 @@ impl App {
             let result = (|| {
                 let flat = rv_core::export::flatten(&doc, &src);
                 let bytes = rv_core::export::encode(&flat, src.exif.as_deref(), &o).map_err(|e| e.to_string())?;
-                let (f, w, h) = (o.format, flat.w, flat.h);
+                let (f, (w, h)) = (o.format, o.out_size(flat.w, flat.h));
                 rv_core::atomic::write_atomic(&dst, &bytes, |b| rv_core::export::verify(b, f, w, h))
                     .map_err(|e| e.to_string())
             })();
@@ -1856,6 +2078,9 @@ impl App {
             format,
             jpeg_quality: m.jpeg_quality.clamp(1, 100),
             background: [255, 255, 255],
+            flatten: false,
+            dpi: None,
+            size: None,
             preset: if doc.redactions.is_empty() {
                 m.metadata_preset
             } else {
@@ -1868,7 +2093,7 @@ impl App {
             let result = (|| {
                 let flat = rv_core::export::flatten(&doc, &src);
                 let bytes = rv_core::export::encode(&flat, src.exif.as_deref(), &o).map_err(|e| e.to_string())?;
-                let (w, h) = (flat.w, flat.h);
+                let (w, h) = o.out_size(flat.w, flat.h);
                 let backup =
                     rv_core::atomic::replace_original(&file, &bytes, |b| rv_core::export::verify(b, format, w, h))
                         .map_err(|e| e.to_string())?;
@@ -1903,6 +2128,7 @@ impl App {
             WriteKind::Project => "title-save-project",
             WriteKind::Export => "title-export",
             WriteKind::Overwrite => "title-overwrite",
+            WriteKind::Convert => "title-convert",
         };
         let bin = match result {
             Ok(b) => b,
@@ -1922,6 +2148,7 @@ impl App {
                     m.history.exported_revision = Some(rev);
                     m.reload_on_exit = true;
                 }
+                WriteKind::Convert => {}
             }
         }
         if kind == WriteKind::Overwrite
@@ -1992,8 +2219,8 @@ impl App {
                 self.navigate(id, if d < 0 { Nav::Previous } else { Nav::Next });
                 true
             }
-            // keys never produce it (toolbar buttons do)
-            crate::markup::Out::Do(_) => true,
+            // keys never produce them (toolbar buttons do)
+            crate::markup::Out::Do(_) | crate::markup::Out::Watermark(_) => true,
         }
     }
 
@@ -2141,12 +2368,22 @@ impl App {
                     self.save_frame_as(id);
                 }
             }
+            Action::Convert => {
+                if let Some(id) = id {
+                    self.open_convert(id);
+                }
+            }
             Action::Copy => {
                 if let Some(id) = id {
                     self.copy(id);
                 }
             }
             Action::Paste => self.paste(el, id),
+            Action::CopyBase64 => {
+                if let Some(id) = id {
+                    self.copy_base64(id);
+                }
+            }
             Action::OpenUrl => {
                 if let Some(w) = id.and_then(|id| self.windows.get_mut(&id)) {
                     w.dialog = Some(Dialog::OpenUrl(ui::openurl::OpenUrl::new(String::new())));
@@ -2259,8 +2496,73 @@ impl App {
         let Some(n) = w.player.as_ref().map(|p| p.index()) else {
             return; // NeedsAnimation
         };
-        w.dialog = Some(Dialog::Export(ui::export::Export::frame(&self.settings.markup, n)));
+        let size = w.image_size.unwrap_or_default();
+        w.dialog = Some(Dialog::Export(ui::export::Export::frame(
+            &self.settings.markup,
+            n,
+            size,
+        )));
         w.window.request_redraw();
+    }
+
+    /// Convert…: the options dialog for the file on screen; the file name comes after it.
+    fn open_convert(&mut self, id: WindowId) {
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        if !actions::is_enabled(Action::Convert, &w.enable_state()) {
+            return;
+        }
+        let format = w.info.as_ref().map(|i| i.format);
+        w.dialog = Some(Dialog::Export(ui::export::Export::convert(
+            &self.settings.markup,
+            format,
+            w.image_size.unwrap_or_default(),
+        )));
+        w.window.request_redraw();
+    }
+
+    /// The file decoded again on a worker and encoded with `o`, without a document: its pixels
+    /// are not rendered, and freed with the source once encoded.
+    fn convert(&mut self, id: WindowId, o: rv_core::export::ExportOptions) {
+        let Some(path) = self.windows.get(&id).and_then(|w| w.path.clone()) else {
+            return;
+        };
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let proposed = format!("{stem}.{}", o.format.exts()[0]);
+        let title = i18n::plain(&actions::name(Action::Convert));
+        let Some(dst) = self.pick_save(id, &title, &proposed, path.parent(), (o.format.name(), o.format.exts())) else {
+            return;
+        };
+        if folder::same_path_ordinal(&dst, &path) {
+            return self.message(Some(id), "title-convert", t("convert-over-source"));
+        }
+        self.windows.get_mut(&id).unwrap().pending_ops += 1;
+        let opts = self.decode_opts;
+        self.spawn(move || {
+            let result = (|| {
+                let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+                let img = rv_core::decode::decode(&bytes, rv_core::formats::Format::from_path(&path), &opts)
+                    .map_err(|e| e.to_string())?;
+                drop(bytes);
+                let src = rv_core::export::DocSource::new(img, Arc::from(Vec::new()));
+                let exif = src.exif.clone();
+                let flat = rv_core::export::Flat::of(src);
+                let out = rv_core::export::encode(&flat, exif.as_deref(), &o).map_err(|e| e.to_string())?;
+                let (f, (w, h)) = (o.format, o.out_size(flat.w, flat.h));
+                drop(flat);
+                rv_core::atomic::write_atomic(&dst, &out, |b| rv_core::export::verify(b, f, w, h))
+                    .map_err(|e| e.to_string())
+            })();
+            UserEvent::MarkupWritten {
+                window: id,
+                kind: WriteKind::Convert,
+                path: dst,
+                revision: Default::default(),
+                result: result.map(|_| None),
+            }
+        });
     }
 
     fn save_frame(&mut self, id: WindowId, o: rv_core::export::ExportOptions, n: usize) {
@@ -2359,6 +2661,35 @@ impl App {
         };
         let first = !w.presented;
         let had_image = w.shown_image;
+        if let Some((adjust, src)) = w.markup.as_mut().and_then(|m| {
+            let want = m.doc().adjust;
+            (!m.adjust_job && m.adjust_pending()).then(|| {
+                m.adjust_job = true;
+                (want, m.source.clone().expect("adjust_pending: a source"))
+            })
+        }) {
+            Self::spawn_adjust(&self.proxy, id, self.view_space, adjust, src);
+        }
+        // before/after: the original's texture while it is needed, freed otherwise
+        if !w.markup.as_ref().is_some_and(|m| m.compare_needs_texture()) {
+            w.before = None;
+        } else if let Some(src) = w.markup.as_mut().and_then(|m| {
+            (!m.compare_job && w.before.is_none()).then(|| {
+                m.compare_job = true;
+                m.source.clone()
+            })?
+        }) {
+            let (proxy, space) = (self.proxy.clone(), self.view_space);
+            std::thread::spawn(move || {
+                let vt = rv_core::color::ViewTransform::new(src.icc.as_deref(), space);
+                let rgba = rv_core::color::finish_view(rv_core::color::rgba8((*src.pixels).clone()), &vt);
+                let _ = proxy.send_event(UserEvent::CompareReady {
+                    window: id,
+                    source: Arc::as_ptr(&src.pixels) as usize,
+                    rgba,
+                });
+            });
+        }
         w.redraw(gpu, &self.settings);
         if w.menus.is_none() {
             // Native menus after the first frame: they are not needed for it (measured ~6 ms earlier frame).
@@ -2501,6 +2832,8 @@ impl App {
                 inspector: w.and_then(|w| w.egui_area_title("markup inspector")),
                 source: m.source.clone(),
                 project_path: m.project_path.clone(),
+                watermarks: m.watermarks.clone(),
+                compare: m.compare,
                 exported: m.history.exported_current(),
             }),
             software_adapter: self
@@ -2512,7 +2845,9 @@ impl App {
 
     fn busy(&self) -> bool {
         self.windows.values().any(|w| {
-            w.loading
+            w.markup.as_ref().is_some_and(|m| m.adjust_pending())
+                || (w.before.is_none() && w.markup.as_ref().is_some_and(|m| m.compare_needs_texture()))
+                || w.loading
                 || w.scanning
                 || w.awaiting_present
                 || !w.presented
@@ -2648,6 +2983,7 @@ impl App {
                                 self.leave_markup(id);
                             }
                             Some(crate::markup::Out::Do(a)) => self.dispatch(el, Some(id), a),
+                            Some(crate::markup::Out::Watermark(r)) => self.watermark(id, r),
                             _ => {}
                         }
                     }
@@ -2795,6 +3131,21 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::MarkupSource { window, result } => self.on_markup_source(window, result),
+            UserEvent::CompareReady { window, source, rgba } => {
+                if let (Some(w), Some(gpu)) = (self.windows.get_mut(&window), &self.gpu) {
+                    w.on_compare_ready(gpu, source, rgba);
+                }
+            }
+            UserEvent::AdjustReady {
+                window,
+                adjust,
+                source,
+                rgba,
+            } => {
+                if let (Some(w), Some(gpu)) = (self.windows.get_mut(&window), &self.gpu) {
+                    w.on_adjust_ready(gpu, adjust, source, rgba);
+                }
+            }
             UserEvent::SvgRaster {
                 window,
                 generation,
@@ -2836,6 +3187,7 @@ impl ApplicationHandler<UserEvent> for App {
                         self.leave_markup(id);
                     }
                     Some(crate::markup::Out::Do(a)) => self.dispatch(el, Some(id), a),
+                    Some(crate::markup::Out::Watermark(r)) => self.watermark(id, r),
                     _ => {}
                 }
             }
@@ -2864,6 +3216,17 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::Downloaded { window, url, result } => self.on_downloaded(el, window, url, result),
+            UserEvent::Base64Saved { window, result } => self.on_base64_saved(el, window, result),
+            UserEvent::WatermarkLoaded { window, path, result } => self.on_watermark_loaded(window, path, result),
+            UserEvent::WatermarksChecked { window, list } => {
+                if let Some(w) = self.windows.get_mut(&window) {
+                    w.pending_ops = w.pending_ops.saturating_sub(1);
+                    if let Some(m) = &mut w.markup {
+                        m.watermarks = list;
+                        w.window.request_redraw();
+                    }
+                }
+            }
             UserEvent::OpenWithList { window, path, apps } => self.on_open_with_list(window, path, apps),
             UserEvent::OpDone {
                 window,

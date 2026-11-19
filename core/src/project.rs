@@ -1,6 +1,6 @@
 //! `.rvm` Markup projects: a ZIP with
-//! `manifest.json`, `document.json` (the `DocState`) and `original.<ext>`, the original file's
-//! exact bytes. Read entirely in memory as untrusted input: nothing is ever written to
+//! `manifest.json`, `document.json` (the `DocState`), `original.<ext>`, the original file's
+//! exact bytes, and one `image-<id>.png` per image shape's pixels (version 2). Read entirely in memory as untrusted input: nothing is ever written to
 //! disk, every limit is checked while reading (not from the headers), and any violation is a
 //! `ProjectError` — never a partial load, never a panic.
 
@@ -12,7 +12,9 @@ use std::io::{Cursor, Read, Write};
 
 pub const EXTENSION: &str = "rvm";
 pub const FORMAT_ID: &str = "rview-markup";
-pub const VERSION: u32 = 1;
+/// The newest version this build reads. 2 = image adjustments and image shapes; a project
+/// without them is still written as 1, so older versions open it.
+pub const VERSION: u32 = 2;
 
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
@@ -27,6 +29,8 @@ const MAX_OBJECTS: usize = 100_000;
 const MAX_POINTS: usize = 1_000_000;
 const MAX_TOTAL_POINTS: usize = 10_000_000;
 const MAX_TEXT: usize = 100_000;
+/// Image shapes' pixels (distinct images; copies of one share it).
+const MAX_IMAGES: usize = 16;
 /// Font sizes the Inspector offers (image px).
 pub const TEXT_SIZES: std::ops::RangeInclusive<f32> = 4.0..=500.0;
 
@@ -136,10 +140,13 @@ pub fn read(bytes: &[u8], opts: &DecodeOptions) -> Result<Project, ProjectError>
         return Err(ProjectError::TooLarge);
     }
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(zip_err)?;
-    if zip.len() != 3 {
-        return Err(corrupt(format!("{} entries instead of 3", zip.len())));
+    let entries = zip.len();
+    if !(3..=3 + MAX_IMAGES).contains(&entries) {
+        return Err(corrupt(format!("{entries} entries instead of 3")));
     }
     let (mut manifest, mut document, mut original) = (None, None, None);
+    let mut images: std::collections::BTreeMap<String, std::sync::Arc<crate::edit::picture::ImageData>> =
+        Default::default();
     for i in 0..zip.len() {
         let mut e = zip.by_index(i).map_err(zip_err)?;
         let name = e.name().map_err(zip_err)?.into_owned();
@@ -163,11 +170,22 @@ pub fn read(bytes: &[u8], opts: &DecodeOptions) -> Result<Project, ProjectError>
         if !same {
             return Err(corrupt(format!("local header of {name:?} differs from the directory")));
         }
+        if let Some(id) = image_id(&name) {
+            let png = read_entry(&mut e, crate::edit::picture::MAX_BYTES as u64)?;
+            let d = crate::edit::picture::ImageData::from_png(&png).map_err(|err| corrupt(format!("{name}: {err}")))?;
+            if d.id != id {
+                return Err(corrupt(format!("{name}: content differs from its name")));
+            }
+            if images.insert(id.to_string(), d).is_some() {
+                return Err(corrupt(format!("duplicate entry {name:?}")));
+            }
+            continue;
+        }
         let (slot, limit) = match name.as_str() {
             "manifest.json" => (&mut manifest, MAX_MANIFEST),
             "document.json" => (&mut document, MAX_DOCUMENT),
             n if original_format(n).is_some() => (&mut original, MAX_ORIGINAL),
-            _ => return Err(corrupt(format!("unexpected entry {name:?}"))),
+            _ => return Err(corrupt(format!("unexpected entry {name:?} ({entries} entries)"))),
         };
         if slot.is_some() {
             return Err(corrupt(format!("duplicate entry {name:?}")));
@@ -190,7 +208,8 @@ pub fn read(bytes: &[u8], opts: &DecodeOptions) -> Result<Project, ProjectError>
     if manifest.original_len != original.len() as u64 {
         return Err(corrupt("original size differs from the manifest"));
     }
-    let doc: DocState = serde_json::from_slice(&d).map_err(|e| corrupt(format!("document.json: {e}")))?;
+    let mut doc: DocState = serde_json::from_slice(&d).map_err(|e| corrupt(format!("document.json: {e}")))?;
+    attach_images(&mut doc, &images)?;
     let format = original_format(&oname).expect("checked above");
     // rule 8: the normal decoder, with its limits (2 GP from the header)
     let image = crate::decode::decode(&original, Some(format), opts).map_err(ProjectError::Original)?;
@@ -204,6 +223,54 @@ pub fn read(bytes: &[u8], opts: &DecodeOptions) -> Result<Project, ProjectError>
     })
 }
 
+/// `image-<16 hex digits>.png` → the ID.
+fn image_id(name: &str) -> Option<&str> {
+    let id = name.strip_prefix("image-")?.strip_suffix(".png")?;
+    (id.len() == 16 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then_some(id)
+}
+
+/// Every image shape gets its pixels; an image no shape uses, or a shape without its image, is
+/// an error.
+fn attach_images(
+    doc: &mut DocState,
+    images: &std::collections::BTreeMap<String, std::sync::Arc<crate::edit::picture::ImageData>>,
+) -> Result<(), ProjectError> {
+    let mut used = std::collections::BTreeSet::new();
+    for s in &mut doc.shapes {
+        if let Geom::Image { image, .. } = &s.geom {
+            let d = images
+                .get(&image.id)
+                .ok_or_else(|| corrupt(format!("document: image {:?} missing", image.id)))?;
+            used.insert(image.id.clone());
+            let mut shape = (**s).clone();
+            if let Geom::Image { image, .. } = &mut shape.geom {
+                image.data = Some(d.clone());
+            }
+            *s = std::sync::Arc::new(shape);
+        }
+    }
+    if used.len() != images.len() {
+        return Err(corrupt("an image entry no shape uses"));
+    }
+    Ok(())
+}
+
+/// The distinct images of the document's image shapes.
+fn images_of(doc: &DocState) -> Vec<std::sync::Arc<crate::edit::picture::ImageData>> {
+    let mut out: Vec<std::sync::Arc<crate::edit::picture::ImageData>> = Vec::new();
+    for s in &doc.shapes {
+        if let Geom::Image {
+            image: crate::edit::picture::ImageRef { data: Some(d), .. },
+            ..
+        } = &s.geom
+            && !out.iter().any(|o| o.id == d.id)
+        {
+            out.push(d.clone());
+        }
+    }
+    out
+}
+
 /// Semantic checks of rule 7.
 pub fn validate(doc: &DocState, w: u32, h: u32) -> Result<(), ProjectError> {
     let bad = |s: &str| Err(corrupt(format!("document: {s}")));
@@ -215,6 +282,9 @@ pub fn validate(doc: &DocState, w: u32, h: u32) -> Result<(), ProjectError> {
     }
     if doc.orient.quarter_turns > 3 {
         return bad("orientation");
+    }
+    if !doc.adjust.valid() {
+        return bad("adjustments out of range");
     }
     if let Some(c) = doc.crop
         && (c.w == 0 || c.h == 0 || c.x as u64 + c.w as u64 > w as u64 || c.y as u64 + c.h as u64 > h as u64)
@@ -260,6 +330,7 @@ pub fn validate(doc: &DocState, w: u32, h: u32) -> Result<(), ProjectError> {
                 Geom::Loupe { center, radius, zoom } => {
                     xy(center.x, center.y) && *radius <= lx.max(ly) && (2.0..=4.0).contains(zoom)
                 }
+                Geom::Image { rect: r, rotation, .. } => rect(r) && rot(*rotation),
                 Geom::Pen { points } | Geom::Highlight { points } => {
                     total += points.len();
                     points.len() <= MAX_POINTS && points.iter().all(|p| xy(p.x, p.y))
@@ -322,9 +393,19 @@ pub fn write(doc: &DocState, original: &[u8], original_name: &str, format: Forma
                 .map(|(e, _)| e.to_string())
         })
         .ok_or_else(|| ProjectError::Unsupported(format!("{} originals", format.name())))?;
+    let images = images_of(doc);
+    if images.len() > MAX_IMAGES {
+        return Err(ProjectError::Unsupported(format!(
+            "more than {MAX_IMAGES} different images"
+        )));
+    }
     let manifest = Manifest {
         format: FORMAT_ID.into(),
-        version: VERSION,
+        version: if doc.adjust.is_neutral() && images.is_empty() {
+            1
+        } else {
+            VERSION
+        },
         app: format!("rView {}", env!("CARGO_PKG_VERSION")),
         created: iso8601(std::time::SystemTime::now()),
         original_name: original_name.into(),
@@ -342,6 +423,15 @@ pub fn write(doc: &DocState, original: &[u8], original_name: &str, format: Forma
     z.write_all(&serde_json::to_vec(doc).map_err(|e| corrupt(e.to_string()))?)?;
     z.start_file(format!("original.{ext}"), stored).map_err(io)?;
     z.write_all(original)?;
+    for d in &images {
+        // PNG: already compressed
+        z.start_file(
+            format!("image-{}.png", d.id),
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .map_err(io)?;
+        z.write_all(&d.png)?;
+    }
     Ok(z.finish().map_err(io)?.into_inner())
 }
 

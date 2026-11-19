@@ -65,6 +65,7 @@ const TOOLS: &[Entry] = &[
     Sub("menu-animation", ANIMATION),
     A(Action::Slideshow),
     Sep,
+    A(Action::Convert),
     A(Action::ColorPicker),
 ];
 const HELP: &[Entry] = &[A(Action::Welcome)];
@@ -77,7 +78,7 @@ const BAR: &[Entry] = &[
         OPEN_WITH, A(Action::OpenContainingFolder), A(Action::ShowFileInfo), Sep, A(Action::CloseWindow), A(Action::Quit),
     ]),
     Sub("menu-edit", &[
-        A(Action::Undo), A(Action::Redo), Sep, A(Action::Copy), A(Action::Paste), A(Action::Rename), Sep,
+        A(Action::Undo), A(Action::Redo), Sep, A(Action::Copy), A(Action::CopyBase64), A(Action::Paste), A(Action::Rename), Sep,
         A(Action::Delete), A(Action::DeletePermanent),
     ]),
     Sub("menu-view", VIEW),

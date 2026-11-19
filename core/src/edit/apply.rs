@@ -41,6 +41,8 @@ pub enum Edit {
     },
     FlipH,
     FlipV,
+    /// The image adjustments, replaced as a whole.
+    SetAdjust(super::adjust::Adjustments),
     /// Several edits as one (the Inspector changing every selected shape): applied in order,
     /// all-or-nothing.
     Batch(Vec<Edit>),
@@ -58,6 +60,8 @@ pub enum EditError {
     TooSmall,
     #[error("nothing to do")]
     Empty,
+    #[error("a value is out of its range")]
+    OutOfRange,
 }
 
 /// Smallest object size in image pixels.
@@ -109,6 +113,11 @@ fn translate_geom(g: &Geom, d: VectorF) -> Geom {
             font: font.clone(),
             align: *align,
         },
+        Geom::Image { rect, rotation, image } => Geom::Image {
+            rect: rect.translated(d),
+            rotation: *rotation,
+            image: image.clone(),
+        },
     }
 }
 
@@ -153,6 +162,13 @@ pub(crate) fn check_geom(g: &Geom) -> Result<(), EditError> {
         Geom::Text {
             rect, rotation, font, ..
         } => finite(&[rect.x, rect.y, rect.w, rect.h, *rotation, font.size]) && rect.w >= MIN && font.size > 0.0,
+        // its pixels must come with it
+        Geom::Image { rect, rotation, image } => {
+            finite(&[rect.x, rect.y, rect.w, rect.h, *rotation])
+                && rect.w >= MIN
+                && rect.h >= MIN
+                && image.data.as_ref().is_some_and(|d| d.id == image.id)
+        }
     };
     if ok { Ok(()) } else { Err(EditError::TooSmall) }
 }
@@ -327,6 +343,12 @@ impl DocState {
             Edit::Rotate { quarter_turns } => s.orient = s.orient.rotated(*quarter_turns),
             Edit::FlipH => s.orient = s.orient.mirrored(),
             Edit::FlipV => s.orient = s.orient.flipped(),
+            Edit::SetAdjust(a) => {
+                if !a.valid() {
+                    return Err(EditError::OutOfRange);
+                }
+                s.adjust = *a;
+            }
             Edit::Batch(list) => {
                 if list.is_empty() {
                     return Err(EditError::Empty);

@@ -56,6 +56,12 @@ fn draw_prepared(
     if let Geom::Loupe { center, radius, zoom } = &shape.geom {
         draw_loupe(pm, *center, *radius, *zoom, op, t, base);
     }
+    if let Geom::Image { rect, rotation, image } = &shape.geom {
+        if let Some(d) = &image.data {
+            draw_image(pm, rect, *rotation, d, op, t, colors);
+        }
+        return;
+    }
     if op >= 1.0 || paths.len() <= 1 {
         for (path, ink) in paths {
             if let Some(c) = ink_color(shape, *ink) {
@@ -144,6 +150,74 @@ fn draw_loupe(pm: &mut PixmapMut, c: PointF, radius: f32, zoom: f32, op: f32, t:
         ..Default::default()
     };
     pm.fill_path(&circle, &paint, FillRule::Winding, t, None);
+}
+
+/// An image shape: its pixels in the target's colour space, stretched over the rectangle and
+/// rotated with it; drawn from the mipmap level for its size on the target.
+fn draw_image(
+    pm: &mut PixmapMut,
+    rect: &RectF,
+    rotation: f32,
+    d: &super::picture::ImageData,
+    op: f32,
+    t: Transform,
+    colors: ColorMap,
+) {
+    // target pixels per image-space unit; the mipmap level for that size
+    let scale = (t.sx * t.sy - t.kx * t.ky).abs().sqrt();
+    let want = |side: f32| (side * scale).ceil().max(1.0) as u32;
+    let (Some(px), Some(r)) = (
+        d.pixmap(colors, want(rect.w), want(rect.h)),
+        tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.w, rect.h),
+    ) else {
+        return;
+    };
+    let (w, h) = (px.width(), px.height());
+    let turn = super::geom::rotation_about(rect, rotation);
+    let Some(path) = tiny_skia::PathBuilder::from_rect(r).transform(turn) else {
+        return;
+    };
+    // pattern pixel → the rectangle → rotated (image space: fill_path applies `t` to it too)
+    let shader = turn
+        .pre_translate(rect.x, rect.y)
+        .pre_scale(rect.w / w as f32, rect.h / h as f32);
+    let paint = Paint {
+        anti_alias: true,
+        shader: tiny_skia::Pattern::new(
+            px.as_ref().as_ref(),
+            tiny_skia::SpreadMode::Pad,
+            tiny_skia::FilterQuality::Bilinear,
+            1.0,
+            shader,
+        ),
+        ..Default::default()
+    };
+    if op >= 1.0 {
+        pm.fill_path(&path, &paint, FillRule::Winding, t, None);
+        return;
+    }
+    // opaque into a layer, composited with the opacity: a pattern's own opacity is applied
+    // unevenly on anti-aliased edge pixels (they came out more opaque than the inside)
+    let Some(b) = path.clone().transform(t).map(|p| p.bounds()) else {
+        return;
+    };
+    let x0 = b.left().floor().max(0.0) as i32;
+    let y0 = b.top().floor().max(0.0) as i32;
+    let x1 = (b.right().ceil() as i32).min(pm.width() as i32);
+    let y1 = (b.bottom().ceil() as i32).min(pm.height() as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let Some(mut layer) = Pixmap::new((x1 - x0) as u32, (y1 - y0) as u32) else {
+        return;
+    };
+    let lt = t.post_translate(-x0 as f32, -y0 as f32);
+    layer.fill_path(&path, &paint, FillRule::Winding, lt, None);
+    let pp = PixmapPaint {
+        opacity: op,
+        ..Default::default()
+    };
+    pm.draw_pixmap(x0, y0, layer.as_ref(), &pp, Transform::identity(), None);
 }
 
 /// Draw shapes in z-order onto a premultiplied target. `t` maps image space to the target's
@@ -270,16 +344,27 @@ pub struct Source<'a> {
     pub rgba: &'a [u8],
 }
 
+/// The document's base: the source with its adjustments (borrowed when neutral).
+pub fn adjusted<'a>(doc: &DocState, px: &'a Pixels) -> std::borrow::Cow<'a, Pixels> {
+    if doc.adjust.is_neutral() {
+        std::borrow::Cow::Borrowed(px)
+    } else {
+        std::borrow::Cow::Owned(super::adjust::apply(px, doc.image_size.w, &doc.adjust))
+    }
+}
+
 /// `render` for 8- or 16-bit sources (the document keeps 16 bit). 16-bit: the shapes are
 /// rasterised into one transparent premultiplied RGBA8 layer, composited source-over onto the
 /// premultiplied 16-bit region (the same result as drawing them on it, within rounding).
 pub fn render_pixels(doc: &DocState, w: u32, h: u32, px: &Pixels, colors: ColorMap) -> (u32, u32, Pixels) {
+    let base = adjusted(doc, px);
     let mut cache = PatchCache::default();
-    let patches = super::redact::patches(doc, w, h, px.into(), colors, &mut cache);
-    render_pixels_with(doc, w, h, px, colors, &patches)
+    let patches = super::redact::patches(doc, w, h, (&*base).into(), colors, &mut cache);
+    render_pixels_with(doc, w, h, &base, colors, &patches)
 }
 
-/// `render_pixels` with the redaction patches already computed (from a cache).
+/// `render_pixels` from the document's base (`adjusted`) with the redaction patches already
+/// computed (from a cache).
 pub fn render_pixels_with(
     doc: &DocState,
     w: u32,
@@ -344,12 +429,22 @@ pub fn render_pixels_with(
 
 /// The flattened document: (width, height, straight RGBA8 in the document space).
 pub fn render(doc: &DocState, src: &Source, colors: ColorMap) -> (u32, u32, Vec<u8>) {
+    let owned =
+        (!doc.adjust.is_neutral()).then(|| super::adjust::apply(&Pixels::Rgba8(src.rgba.to_vec()), src.w, &doc.adjust));
+    let base = match &owned {
+        Some(Pixels::Rgba8(v)) => Source {
+            w: src.w,
+            h: src.h,
+            rgba: v,
+        },
+        _ => Source { ..*src },
+    };
     let mut cache = PatchCache::default();
-    let patches = super::redact::patches(doc, src.w, src.h, SrcPx::R8(src.rgba), colors, &mut cache);
-    render_with(doc, src, colors, &patches)
+    let patches = super::redact::patches(doc, base.w, base.h, SrcPx::R8(base.rgba), colors, &mut cache);
+    render_with(doc, &base, colors, &patches)
 }
 
-/// `render` with the redaction patches already computed.
+/// `render` from the document's base (`adjusted`) with the redaction patches already computed.
 pub fn render_with(doc: &DocState, src: &Source, colors: ColorMap, patches: &[Arc<Patch>]) -> (u32, u32, Vec<u8>) {
     assert_eq!(
         (src.w, src.h),

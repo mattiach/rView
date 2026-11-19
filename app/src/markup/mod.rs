@@ -25,6 +25,8 @@ pub enum Tool {
     Redact,
     /// Click: a text box edited inline.
     Text,
+    /// Image adjustments in the Inspector; the pointer does nothing on the image.
+    Adjust,
 }
 
 impl Tool {
@@ -40,7 +42,9 @@ impl Tool {
             Tool::Draw(ShapeKind::Highlight) => "highlight",
             Tool::Draw(ShapeKind::Text) | Tool::Text => "text",
             Tool::Draw(ShapeKind::Loupe) => "loupe",
+            Tool::Draw(ShapeKind::Image) => "image",
             Tool::Redact => "redact",
+            Tool::Adjust => "adjust",
         }
     }
 
@@ -57,6 +61,7 @@ impl Tool {
             "redact" => Tool::Redact,
             "loupe" => Tool::Draw(ShapeKind::Loupe),
             "text" => Tool::Text,
+            "adjust" => Tool::Adjust,
             _ => return None,
         })
     }
@@ -99,7 +104,7 @@ pub struct Mods {
 }
 
 /// What the app must do after a key or a button.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Out {
     Handled,
     /// The key isn't Markup's: global shortcuts may use it.
@@ -110,6 +115,17 @@ pub enum Out {
     Do(crate::actions::Action),
     /// ←/→ without a selection.
     Navigate(i8),
+    /// The watermark menu: the app loads the image (or asks for one, or clears the list).
+    Watermark(WatermarkReq),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WatermarkReq {
+    /// The Open dialog.
+    Choose,
+    Open(PathBuf),
+    /// Forget the recent watermarks.
+    Clear,
 }
 
 /// What the pointer is over (`Markup::hover`).
@@ -136,6 +152,18 @@ pub struct Markup {
     pub reload_on_exit: bool,
     /// Redaction patches written into the image texture (preview).
     pub shown_patches: Vec<Arc<rv_core::edit::redact::Patch>>,
+    /// The adjustments of the image texture (the preview catches up with the document's on a
+    /// worker, one job at a time: `adjust_job`).
+    pub shown_adjust: Adjustments,
+    pub adjust_job: bool,
+    /// The recent watermarks and whether each file is still there (checked by the app off the
+    /// UI thread).
+    pub watermarks: Vec<(PathBuf, bool)>,
+    /// Before/after: the divider's place across the visible image (0 = left edge), None = off.
+    /// Left of it the original (same crop and orientation), right of it the document.
+    pub compare: Option<f32>,
+    /// The original's texture is being prepared on a worker.
+    pub compare_job: bool,
     pub tool: Tool,
     pub sel: Selection,
     /// The shape being drawn (not in the document until the button is released).
@@ -176,6 +204,11 @@ impl Markup {
             source: None,
             reload_on_exit: false,
             shown_patches: Vec::new(),
+            shown_adjust: Adjustments::default(),
+            adjust_job: false,
+            watermarks: Vec::new(),
+            compare: None,
+            compare_job: false,
             project_path: None,
             original_name,
             file,
@@ -268,7 +301,7 @@ impl Markup {
         if self.editing.is_some() {
             return if in_selection() { Hover::Type } else { Hover::None };
         }
-        if self.tool == Tool::Crop {
+        if matches!(self.tool, Tool::Crop | Tool::Adjust) {
             return Hover::None;
         }
         let creating = self.tool != Tool::Select;
@@ -392,6 +425,7 @@ impl Markup {
             return;
         }
         match self.tool {
+            Tool::Adjust => {}
             Tool::Draw(_) | Tool::Redact => {
                 self.drag = Some(Drag::Create {
                     from: p,
@@ -561,6 +595,8 @@ impl Markup {
             }
         };
         let geom = match kind {
+            // inserted from the watermark menu, never drawn
+            ShapeKind::Image => return None,
             ShapeKind::Rect => Geom::Rect {
                 rect: RectF::from_points(from, square(p)),
                 rotation: 0.0,
@@ -773,6 +809,83 @@ impl Markup {
         }
     }
 
+    /// An image (watermark) as a new shape: centred on the visible image, 30 % of it at most,
+    /// upright on screen when the document is turned, selected for moving and resizing.
+    pub fn insert_image(&mut self, data: Arc<rv_core::edit::picture::ImageData>) {
+        self.set_tool(Tool::Select);
+        let doc = self.doc().clone();
+        let r = doc.region();
+        let (cw, ch) = doc.orient.apply_size(r.w, r.h);
+        let (iw, ih) = (data.w as f32, data.h as f32);
+        let s = (0.3 * cw as f32 / iw).min(0.3 * ch as f32 / ih);
+        let (w, h) = ((iw * s).max(1.0), (ih * s).max(1.0));
+        let (cx, cy) = (r.x as f32 + r.w as f32 / 2.0, r.y as f32 + r.h as f32 / 2.0);
+        let shape = Shape {
+            id: doc.peek_id(),
+            geom: Geom::Image {
+                rect: RectF {
+                    x: cx - w / 2.0,
+                    y: cy - h / 2.0,
+                    w,
+                    h,
+                },
+                rotation: -(doc.orient.quarter_turns as f32) * std::f32::consts::FRAC_PI_2,
+                image: rv_core::edit::picture::ImageRef::new(data),
+            },
+            style: self.style_for(ShapeKind::Image),
+        };
+        let id = shape.id;
+        if self.history.apply(&Edit::AddShape(shape)).is_ok() {
+            self.after_change();
+            self.sel = Selection::only(id);
+        }
+    }
+
+    /// The image adjustments from the Inspector: one history entry per slider interaction.
+    pub fn set_adjust(&mut self, a: Adjustments) {
+        let e = Edit::SetAdjust(a);
+        if self.inspector_gesture {
+            let _ = self.history.update_gesture(&e);
+        } else {
+            self.apply(e);
+        }
+    }
+
+    /// The document differs from the original on screen: adjustments, redactions or shapes (a
+    /// crop or a rotation alone: the comparison shows the original with them, nothing to see).
+    pub fn has_edits(&self) -> bool {
+        let d = self.doc();
+        !d.adjust.is_neutral() || !d.redactions.is_empty() || !d.shapes.is_empty()
+    }
+
+    /// Before/after on (divider in the middle of the visible image) or off; nothing without edits.
+    pub fn toggle_compare(&mut self) {
+        self.compare = if self.compare.is_none() && self.has_edits() {
+            Some(0.5)
+        } else {
+            None
+        };
+    }
+
+    /// The comparison ends by itself when the last edit is undone or removed (called every frame).
+    pub fn sync_compare(&mut self) {
+        if self.compare.is_some() && !self.has_edits() {
+            self.compare = None;
+        }
+    }
+
+    /// The comparison needs a texture of its own: the image on screen differs from the original
+    /// (adjusted, or with redactions). Otherwise the image texture itself, without the shapes, is
+    /// the original.
+    pub fn compare_needs_texture(&self) -> bool {
+        self.compare.is_some() && (!self.shown_adjust.is_neutral() || !self.shown_patches.is_empty())
+    }
+
+    /// The preview shows other adjustments than the document's (a job is running or due).
+    pub fn adjust_pending(&self) -> bool {
+        self.source.is_some() && self.shown_adjust != self.doc().adjust
+    }
+
     /// Change the geometry of selected shapes of one kind (corner radius, arrow heads).
     pub fn set_geom(&mut self, f: &dyn Fn(&Geom) -> Option<Geom>) {
         self.pause_text();
@@ -850,10 +963,59 @@ impl Markup {
                 }
             }
             "crop-cancel" => self.set_tool(Tool::Select),
+            "compare" => self.toggle_compare(),
+            // "compare-at:<0…1>": the divider's place (turns the comparison on, if there are edits)
+            n if n.starts_with("compare-at:") => match n["compare-at:".len()..].parse::<f32>() {
+                Ok(f) if f.is_finite() && self.has_edits() => self.compare = Some(f.clamp(0.0, 1.0)),
+                _ => return Out::Pass,
+            },
+            "watermark-choose" => return Out::Watermark(WatermarkReq::Choose),
+            "watermark-clear" => return Out::Watermark(WatermarkReq::Clear),
+            n if n.starts_with("watermark:") => {
+                return Out::Watermark(WatermarkReq::Open(PathBuf::from(&n["watermark:".len()..])));
+            }
+            "adjust-reset" => {
+                if !self.doc().adjust.is_neutral() {
+                    self.apply(Edit::SetAdjust(Adjustments::default()));
+                }
+            }
+            // "adjust:<parameter>:<value>": one history entry
+            n if n.starts_with("adjust:") => {
+                let mut a = self.doc().adjust;
+                match n.split(':').collect::<Vec<_>>()[..] {
+                    ["adjust", p, v] => match (rv_core::edit::adjust::Param::from_name(p), v.parse::<f32>()) {
+                        (Some(p), Ok(v)) => a.set(p, v),
+                        _ => return Out::Pass,
+                    },
+                    _ => return Out::Pass,
+                }
+                if self.history.apply(&Edit::SetAdjust(a)).is_err() {
+                    return Out::Pass;
+                }
+            }
             "crop-invert" => {
                 let doc = self.doc().clone();
                 if let Some(c) = &mut self.crop {
                     c.invert(&doc);
+                }
+            }
+            // "crop-aspect:<message id>" (a preset), "crop-ratio:<w>:<h>" (custom)
+            n if n.starts_with("crop-aspect:") || n.starts_with("crop-ratio:") => {
+                let doc = self.doc().clone();
+                let Some(c) = &mut self.crop else { return Out::Pass };
+                let ok = match n.split(':').collect::<Vec<_>>()[..] {
+                    ["crop-aspect", id] => c.pick(&doc, id),
+                    ["crop-ratio", w, h] => match (w.parse(), h.parse()) {
+                        (Ok(w), Ok(h)) => {
+                            c.set_custom(&doc, w, h);
+                            true
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if !ok {
+                    return Out::Pass;
                 }
             }
             _ => return Out::Pass,
@@ -1221,6 +1383,7 @@ impl Markup {
             "Ctrl+Shift+[" | "Ctrl+{" | "Ctrl+Shift+{" => self.reorder(false, true),
             "Tab" => self.cycle(false),
             "Shift+Tab" => self.cycle(true),
+            "\\" => self.toggle_compare(),
             "V" => self.set_tool(Tool::Select),
             "C" => self.set_tool(Tool::Crop),
             "R" | "E" | "L" | "A" | "P" => {
@@ -1262,6 +1425,30 @@ impl Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crop_preset_and_custom_buttons() {
+        let mut m = Markup::new(1200, 800, BTreeMap::new(), Tool::Crop, PathBuf::from("a.png"));
+        assert_eq!(m.button("crop-aspect:markup-crop-instagram-portrait"), Out::Handled);
+        assert_eq!(m.button("crop-apply"), Out::Handled);
+        let c = m.doc().crop.expect("cropped");
+        assert_eq!((c.w, c.h), (640, 800), "4:5, as tall as the image");
+        // custom, applied: undo gives the previous crop back
+        m.set_tool(Tool::Crop);
+        assert_eq!(m.button("crop-ratio:3:1"), Out::Handled);
+        m.button("crop-apply");
+        let c = m.doc().crop.expect("cropped");
+        assert_eq!((c.w, c.h), (1200, 400));
+        m.undo();
+        assert_eq!(m.doc().crop.map(|c| (c.w, c.h)), Some((640, 800)));
+        // malformed names are not Markup's
+        m.set_tool(Tool::Crop);
+        for bad in ["crop-ratio:x:1", "crop-ratio:3", "crop-aspect:nope"] {
+            assert_eq!(m.button(bad), Out::Pass, "{bad}");
+        }
+        m.set_tool(Tool::Select);
+        assert_eq!(m.button("crop-ratio:1:1"), Out::Pass, "no crop draft");
+    }
 
     /// A just-drawn element is adjusted, not duplicated, until it is confirmed (and the pointer
     /// says so).
@@ -1308,5 +1495,129 @@ mod tests {
         assert_eq!(m.doc().shapes.len(), 2);
         m.set_tool(Tool::Draw(ShapeKind::Line));
         assert!(!m.adjusting() && m.sel.is_empty());
+    }
+
+    #[test]
+    fn adjust_buttons_and_slider_gesture() {
+        let mut m = Markup::new(100, 80, BTreeMap::new(), Tool::Adjust, PathBuf::from("a.png"));
+        assert_eq!(Tool::from_name("adjust"), Some(Tool::Adjust));
+        assert!(matches!(m.button("adjust:exposure:1.5"), Out::Handled));
+        assert!(matches!(m.button("adjust:hue:-30"), Out::Handled));
+        assert_eq!((m.doc().adjust.exposure, m.doc().adjust.hue), (1.5, -30.0));
+        // malformed or out of range: nothing changes
+        for bad in ["adjust:exposure:9", "adjust:nope:1", "adjust:hue", "adjust:hue:x"] {
+            assert!(matches!(m.button(bad), Out::Pass), "{bad}");
+        }
+        let entries = m.history.entries();
+        // a slider held and moved: one history entry
+        m.history.begin_gesture();
+        m.inspector_gesture = true;
+        for v in [10.0, 20.0, 35.0] {
+            let mut a = m.doc().adjust;
+            a.contrast = v;
+            m.set_adjust(a);
+        }
+        m.history.end_gesture();
+        m.inspector_gesture = false;
+        assert_eq!((m.history.entries(), m.doc().adjust.contrast), (entries + 1, 35.0));
+        m.undo();
+        assert_eq!(m.doc().adjust.contrast, 0.0);
+        assert_eq!(m.doc().adjust.hue, -30.0, "the earlier entries stay");
+        assert!(matches!(m.button("adjust-reset"), Out::Handled));
+        assert!(m.doc().adjust.is_neutral());
+        m.undo();
+        assert_eq!(m.doc().adjust.exposure, 1.5, "reset is undoable");
+        // the pointer does nothing with this tool
+        let t = Affine {
+            m: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        };
+        let p = PointF { x: 10.0, y: 10.0 };
+        assert!(matches!(m.hover(p, (10.0, 10.0), &t, 1.0), Hover::None));
+        m.press(p, (10.0, 10.0), &t, 1.0, Mods::default());
+        assert!(m.doc().shapes.is_empty() && m.doc().redactions.is_empty());
+    }
+
+    #[test]
+    fn watermark_inserted_upright_in_the_visible_part() {
+        let mut m = Markup::new(400, 200, BTreeMap::new(), Tool::Adjust, PathBuf::from("a.png"));
+        m.apply(Edit::SetCrop(Some(RectU {
+            x: 100,
+            y: 0,
+            w: 200,
+            h: 200,
+        })));
+        m.apply(Edit::Rotate { quarter_turns: 1 });
+        let mut png = Vec::new();
+        image::RgbaImage::new(50, 10)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let data = rv_core::edit::picture::ImageData::from_file(&png, None, &Default::default()).unwrap();
+        let before = m.history.entries();
+        m.insert_image(data);
+        assert_eq!(m.history.entries(), before + 1, "one history entry");
+        assert_eq!(m.tool, Tool::Select);
+        let s = m.doc().shapes[0].clone();
+        assert_eq!(m.sel.ids, vec![s.id]);
+        let Geom::Image { rect, rotation, .. } = s.geom else {
+            panic!("not an image")
+        };
+        // 30 % of the visible width, centred on the crop, turned back a quarter
+        assert!((rect.w - 60.0).abs() < 1e-3 && (rect.h - 12.0).abs() < 1e-3, "{rect:?}");
+        assert_eq!((rect.x + rect.w / 2.0, rect.y + rect.h / 2.0), (200.0, 100.0));
+        assert!((rotation + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((s.style.opacity - 0.5).abs() < 1e-6);
+        // the menu's buttons
+        assert_eq!(m.button("watermark-choose"), Out::Watermark(WatermarkReq::Choose));
+        assert_eq!(m.button("watermark-clear"), Out::Watermark(WatermarkReq::Clear));
+        assert_eq!(
+            m.button(r"watermark:C:\x\logo.png"),
+            Out::Watermark(WatermarkReq::Open(PathBuf::from(r"C:\x\logo.png")))
+        );
+    }
+
+    #[test]
+    fn compare_buttons_and_key() {
+        let mut m = Markup::new(100, 80, BTreeMap::new(), Tool::Select, PathBuf::from("a.png"));
+        // nothing to compare: off, whatever is pressed (a crop or a rotation alone don't count)
+        m.apply(Edit::Rotate { quarter_turns: 1 });
+        assert!(!m.has_edits());
+        assert_eq!(m.button("compare"), Out::Handled);
+        assert_eq!(m.key(r"\", &[], &[]), Out::Handled);
+        assert_eq!(m.button("compare-at:0.3"), Out::Pass);
+        assert_eq!(m.compare, None, "no edits: stays off");
+        // an adjustment: it works
+        assert_eq!(m.button("adjust:contrast:20"), Out::Handled);
+        assert!(m.has_edits());
+        assert_eq!(m.button("compare"), Out::Handled);
+        assert_eq!(m.compare, Some(0.5), "on, divider in the middle");
+        assert_eq!(m.button("compare-at:1.7"), Out::Handled);
+        assert_eq!(m.compare, Some(1.0), "clamped");
+        assert_eq!(m.button("compare-at:x"), Out::Pass);
+        assert_eq!(m.button("compare"), Out::Handled);
+        assert_eq!(m.compare, None, "off again");
+        assert_eq!(m.key(r"\", &[], &[]), Out::Handled);
+        assert_eq!(m.compare, Some(0.5), "the key toggles it");
+        // its own texture only when the image on screen differs from the original
+        assert!(!m.compare_needs_texture());
+        m.shown_adjust.contrast = 20.0;
+        assert!(m.compare_needs_texture());
+        // undoing the last edit ends the comparison
+        m.undo();
+        m.sync_compare();
+        assert_eq!(m.compare, None, "nothing left to compare");
+        assert!(!m.compare_needs_texture(), "freed when off");
+        // a shape alone counts as an edit
+        m.redo();
+        m.apply(Edit::SetAdjust(Default::default()));
+        let d = m.doc().clone();
+        m.apply(Edit::AddShape(Shape {
+            id: d.peek_id(),
+            geom: Geom::Line {
+                a: PointF { x: 1.0, y: 1.0 },
+                b: PointF { x: 20.0, y: 9.0 },
+            },
+            style: Style::default_for(ShapeKind::Line),
+        }));
+        assert!(m.has_edits());
     }
 }

@@ -145,6 +145,29 @@ pub fn valid() -> Vec<u8> {
     project::write(&sample_doc(W, H), &png, "photo.png", Format::Png).unwrap()
 }
 
+/// A document with one image shape (a 6×4 logo), and that logo.
+pub fn image_doc(w: u32, h: u32) -> (DocState, Arc<picture::ImageData>) {
+    let logo = picture::ImageData::from_file(&tiny_png(6, 4), None, &Default::default()).unwrap();
+    let d = DocState::new(w, h);
+    let d = d
+        .apply(&Edit::AddShape(Shape {
+            id: d.peek_id(),
+            geom: Geom::Image {
+                rect: RectF {
+                    x: 2.0,
+                    y: 3.0,
+                    w: 12.0,
+                    h: 8.0,
+                },
+                rotation: 0.2,
+                image: picture::ImageRef::new(logo.clone()),
+            },
+            style: Style::default_for(ShapeKind::Image),
+        }))
+        .unwrap();
+    (d, logo)
+}
+
 pub fn manifest(len: usize) -> Vec<u8> {
     format!(
         r#"{{"format":"rview-markup","version":1,"app":"test","created":"2026-11-13T00:00:00Z","original_name":"photo.png","original_len":{len}}}"#
@@ -236,6 +259,13 @@ pub fn set_encrypted(mut z: Vec<u8>) -> Vec<u8> {
 /// Every malformed archive of the security tests, named (the fuzzer's seed corpus).
 pub fn cases() -> Vec<(&'static str, Vec<u8>)> {
     let v = valid();
+    let (idoc, logo) = image_doc(W, H);
+    let (id, idj) = (logo.id.clone(), doc_json(&idoc));
+    let mv2 = String::from_utf8(manifest(tiny_png(W, H).len()))
+        .unwrap()
+        .replace("\"version\":1", "\"version\":2")
+        .into_bytes();
+    let other = picture::ImageData::from_file(&tiny_png(5, 5), None, &Default::default()).unwrap();
     let png = tiny_png(W, H);
     let m = manifest(png.len());
     let d = doc_json(&sample_doc(W, H));
@@ -340,7 +370,7 @@ pub fn cases() -> Vec<(&'static str, Vec<u8>)> {
                 Some(
                     String::from_utf8(m.clone())
                         .unwrap()
-                        .replace("\"version\":1", "\"version\":2")
+                        .replace("\"version\":1", "\"version\":3")
                         .into_bytes(),
                 ),
             ),
@@ -367,6 +397,48 @@ pub fn cases() -> Vec<(&'static str, Vec<u8>)> {
         ("crop_outside", with(&doc_json(&crop_out), None)),
         ("far_away", with(&doc_json(&far), None)),
         ("too_wide", with(&doc_json(&wide), None)),
+        (
+            "image_missing",
+            build(&[
+                ("manifest.json", &mv2, true),
+                ("document.json", &idj, true),
+                ("original.png", &png, false),
+            ]),
+        ),
+        (
+            "image_unused",
+            build(&[
+                ("manifest.json", &m, true),
+                ("document.json", &d, true),
+                ("original.png", &png, false),
+                (&format!("image-{}.png", logo.id), &logo.png, false),
+            ]),
+        ),
+        (
+            "image_renamed",
+            build(&[
+                ("manifest.json", &mv2, true),
+                ("document.json", &idj, true),
+                ("original.png", &png, false),
+                (&format!("image-{id}.png"), &other.png, false),
+            ]),
+        ),
+        (
+            "image_not_png",
+            build(&[
+                ("manifest.json", &mv2, true),
+                ("document.json", &idj, true),
+                ("original.png", &png, false),
+                (&format!("image-{id}.png"), b"GIF89a....", false),
+            ]),
+        ),
+        (
+            "bad_adjust",
+            with(
+                format!(r#"{{"image_size":{{"w":{W},"h":{H}}},"next_id":1,"adjust":{{"exposure":9.0}}}}"#).as_bytes(),
+                None,
+            ),
+        ),
         (
             "bad_original",
             build(&[

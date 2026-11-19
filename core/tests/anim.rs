@@ -200,6 +200,9 @@ fn save_frame_as_png_and_jpeg() {
         format,
         jpeg_quality: 95,
         background: [255, 255, 255],
+        flatten: false,
+        dpi: None,
+        size: None,
         preset: rv_core::settings::MetadataPreset::Keep,
     };
     let bytes = gif(Repeat::Infinite);

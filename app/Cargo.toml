@@ -122,6 +122,26 @@ name = "e2e_input"
 harness = false
 
 [[test]]
+name = "e2e_convert"
+harness = false
+
+[[test]]
+name = "e2e_base64"
+harness = false
+
+[[test]]
+name = "e2e_adjust"
+harness = false
+
+[[test]]
+name = "e2e_watermark"
+harness = false
+
+[[test]]
+name = "e2e_compare"
+harness = false
+
+[[test]]
 name = "e2e_tiling"
 harness = false
 

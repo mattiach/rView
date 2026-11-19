@@ -160,6 +160,9 @@ fn solid_in_exported_png_has_no_original_value() {
         format: ExportFormat::Png,
         jpeg_quality: 90,
         background: [255; 3],
+        flatten: false,
+        dpi: None,
+        size: None,
         preset: rv_core::settings::MetadataPreset::StripAll,
     };
     let out = encode(&flat, None, &o).unwrap();

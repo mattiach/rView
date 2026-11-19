@@ -560,6 +560,24 @@ pub fn clipboard_set(owner: Option<HWND>, png: &[u8], dibv5: &[u8], files: &[Pat
     Ok(())
 }
 
+/// Text on the clipboard (CF_UNICODETEXT), replacing its content.
+pub fn clipboard_set_text(owner: Option<HWND>, text: &str) -> Result<(), String> {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
+    let utf16: Vec<u8> = text.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+    let _c = Clipboard::open(owner)?;
+    // SAFETY: clipboard open by this thread; on success the system owns the handle.
+    unsafe {
+        EmptyClipboard().map_err(|e| e.message())?;
+        let h = global_from(&utf16)?;
+        if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(h.0))).is_err() {
+            let _ = GlobalFree(Some(h));
+            return Err(tf("clipboard-refused", &[("format", &CF_UNICODETEXT.to_string())]));
+        }
+    }
+    Ok(())
+}
+
 /// Raw bytes of a clipboard format (None if absent).
 pub fn clipboard_get(format: u32) -> Option<Vec<u8>> {
     use windows::Win32::Foundation::HGLOBAL;

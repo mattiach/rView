@@ -30,6 +30,9 @@ pub struct ViewerWindow {
     egui_pending: Option<std::sync::mpsc::Receiver<egui_wgpu::Renderer>>,
     egui_format: wgpu::TextureFormat,
     pub image: Option<GpuImage>,
+    /// Markup's before/after comparison: the original, when the image texture is adjusted or
+    /// redacted (freed when the comparison ends).
+    pub before: Option<GpuImage>,
     pub path: Option<PathBuf>,
     pub image_size: Option<(u32, u32)>,
     pub error: Option<String>,
@@ -219,6 +222,7 @@ impl ViewerWindow {
             egui_pending: Some(rx),
             egui_format: format,
             image: None,
+            before: None,
             path: None,
             image_size: None,
             error: None,
@@ -1005,15 +1009,17 @@ impl ViewerWindow {
         let (Some(src), Some(img)) = (&m.source, &self.image) else {
             return;
         };
-        // redactions being dragged show their outline only: their patch is computed on release
+        // redactions being dragged show their outline only: their patch is computed on release;
+        // the patches read the adjustments on screen (the texture's), not ones still computing
         let active = m.active_ids();
         let doc = m.history.current();
-        let now = if active
+        let dragged = active
             .iter()
-            .any(|id| matches!(doc.find(*id), Some(rv_core::edit::ObjRef::Redaction(_))))
-        {
+            .any(|id| matches!(doc.find(*id), Some(rv_core::edit::ObjRef::Redaction(_))));
+        let now = if dragged || doc.adjust != m.shown_adjust {
             let mut still = (**doc).clone();
             still.redactions.retain(|r| !active.contains(&r.id));
+            still.adjust = m.shown_adjust;
             src.patches(&still)
         } else {
             src.patches(doc)
@@ -1023,17 +1029,48 @@ impl ViewerWindow {
         if same {
             return;
         }
-        write_patches(gpu, img, src, self.view_space, &m.shown_patches, &now);
+        let base = src.base(&m.shown_adjust);
+        write_patches(gpu, img, src, &base, self.view_space, &m.shown_patches, &now);
         m.shown_patches = now;
+    }
+
+    /// The adjusted preview computed on a worker (`App::spawn_adjust`): the whole texture, then
+    /// the patches again on top. Ignored if Markup ended or restarted meanwhile.
+    pub fn on_adjust_ready(&mut self, gpu: &Gpu, adjust: rv_core::edit::Adjustments, source: usize, rgba: Vec<u8>) {
+        let Some(m) = &mut self.markup else { return };
+        let Some(src) = &m.source else { return };
+        if Arc::as_ptr(&src.pixels) as usize != source {
+            return;
+        }
+        m.adjust_job = false;
+        if let Some(img) = &self.image
+            && (img.w, img.h) == (src.w, src.h)
+            && rgba.len() == src.w as usize * src.h as usize * 4
+        {
+            gpu.rewrite(img, &rgba);
+            m.shown_adjust = adjust;
+            m.shown_patches.clear();
+        }
+        self.window.request_redraw();
     }
 
     /// Put the source pixels back under the shown patches (leaving Markup).
     pub fn clear_patches(&mut self, gpu: &Gpu) {
         let Some(m) = &mut self.markup else { return };
         if let (Some(src), Some(img)) = (&m.source, &self.image) {
-            write_patches(gpu, img, src, self.view_space, &m.shown_patches, &[]);
+            if m.shown_adjust.is_neutral() {
+                write_patches(gpu, img, src, &src.pixels, self.view_space, &m.shown_patches, &[]);
+            } else if (img.w, img.h) == (src.w, src.h) {
+                // adjusted on screen: the whole source again
+                let vt = rv_core::color::ViewTransform::new(src.icc.as_deref(), self.view_space);
+                gpu.rewrite(
+                    img,
+                    &rv_core::color::finish_view(rv_core::color::rgba8((*src.pixels).clone()), &vt),
+                );
+            }
         }
         m.shown_patches.clear();
+        m.shown_adjust = Default::default();
     }
 
     /// The input method follows the text editing: on while a box is edited, its candidates next to
@@ -1081,9 +1118,11 @@ impl ViewerWindow {
         // what loupes magnify: source + redaction patches, in the view space
         let src = m.source.clone();
         let patches = m.shown_patches.clone();
+        let shown = m.shown_adjust;
         let base = move |r: rv_core::edit::RectU| {
             let src = src.as_ref()?;
-            let mut pm = rv_core::edit::render::base_pixmap((&*src.pixels).into(), src.w, r, &patches)?;
+            let px = src.base(&shown);
+            let mut pm = rv_core::edit::render::base_pixmap((&*px).into(), src.w, r, &patches)?;
             let vt = rv_core::color::ViewTransform::new(src.icc.as_deref(), vs);
             rv_core::edit::render::unpremultiply(pm.data_mut());
             vt.apply(pm.data_mut());
@@ -1092,6 +1131,7 @@ impl ViewerWindow {
         };
         // the layers are redrawn when the source arrives or the patches change
         let key = (vs.id() as u64)
+            ^ m.shown_adjust.key().rotate_left(17)
             ^ (m.source.is_some() as u64) << 8
             ^ m.shown_patches
                 .iter()
@@ -1157,6 +1197,40 @@ impl ViewerWindow {
     }
 
     /// Draw the image (no UI) into `target`. Shared by the window and the E2E snapshot.
+    /// While comparing: the divider's screen x (physical px), across the part of the image the
+    /// window shows (as the divider egui draws: the same place at any zoom).
+    fn compare_split(&self) -> Option<u32> {
+        let f = self.markup.as_ref()?.compare?;
+        let vw = self.config.width as f32;
+        let (x, y, w, h) = self
+            .view
+            .region()
+            .or_else(|| self.image_size.map(|(w, h)| (0.0, 0.0, w as f32, h as f32)))?;
+        let t = self.view.screen_from_image();
+        let (ax, _) = t.apply(x, y);
+        let (bx, _) = t.apply(x + w, y + h);
+        let (x0, x1) = (ax.min(bx).clamp(0.0, vw), ax.max(bx).clamp(0.0, vw));
+        Some((x0 + f * (x1 - x0)).round() as u32)
+    }
+
+    /// The prepared original arrived (`App::spawn_compare`): kept while the comparison is on.
+    pub fn on_compare_ready(&mut self, gpu: &Gpu, source: usize, rgba: Vec<u8>) {
+        let Some(m) = &mut self.markup else { return };
+        let Some(src) = &m.source else { return };
+        if Arc::as_ptr(&src.pixels) as usize != source {
+            return;
+        }
+        m.compare_job = false;
+        if m.compare.is_some()
+            && let Some(img) = &self.image
+            && rgba.len() == src.w as usize * src.h as usize * 4
+        {
+            let logical = self.image_size.unwrap_or((src.w, src.h));
+            self.before = Some(gpu.upload(src.w, src.h, &rgba, img.mips, logical));
+        }
+        self.window.request_redraw();
+    }
+
     pub fn draw_content(
         &self,
         gpu: &Gpu,
@@ -1200,21 +1274,44 @@ impl ViewerWindow {
             let y1 = ay.max(by).round().clamp(0.0, vh as f32) as u32;
             (x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
         });
-        if let Some((x, y, w, h)) = clip {
+        // comparing: the document right of the divider, the original left of it
+        let full = clip.unwrap_or((0, 0, vw, vh));
+        let split = self.compare_split().map(|sx| sx.clamp(full.0, full.0 + full.2));
+        let after = match split {
+            Some(sx) => (sx, full.1, full.0 + full.2 - sx, full.3),
+            None => full,
+        };
+        let scissor = |pass: &mut wgpu::RenderPass<'_>, (x, y, w, h): (u32, u32, u32, u32)| {
             pass.set_scissor_rect(x, y, w.min(vw - x.min(vw - 1)), h.min(vh - y.min(vh - 1)));
-        }
-        if let Some(img) = &self.image {
+        };
+        if self.image.is_some() {
             let lin = bg.map(|c| rv_core::color::srgb_decode(c as f32 / 255.0));
             self.globals.write(&gpu.queue, &self.view.ndc_from_image(), lin);
-            let filter = render::choose_filter(s, self.view.scale, img.mips);
-            render::draw_image(&mut pass, pipeline, &self.globals, filter, img);
         }
-        if let Some(o) = self.markup.as_ref().and_then(|m| m.overlay.as_ref()) {
-            o.draw(gpu, &mut pass, format);
+        if after.2 > 0 {
+            scissor(&mut pass, after);
+            if let Some(img) = &self.image {
+                let filter = render::choose_filter(s, self.view.scale, img.mips);
+                render::draw_image(&mut pass, pipeline, &self.globals, filter, img);
+            }
+            if let Some(o) = self.markup.as_ref().and_then(|m| m.overlay.as_ref()) {
+                o.draw(gpu, &mut pass, format);
+            }
         }
-        if clip.is_some() {
-            pass.set_scissor_rect(0, 0, vw, vh);
+        if let Some(sx) = split
+            && sx > full.0
+        {
+            // its own texture when the image on screen is adjusted or redacted; else the image
+            // texture without the shapes is the original
+            let own = self.markup.as_ref().is_some_and(|m| m.compare_needs_texture());
+            let before = if own { self.before.as_ref() } else { self.image.as_ref() };
+            if let Some(img) = before {
+                scissor(&mut pass, (full.0, full.1, sx - full.0, full.3));
+                let filter = render::choose_filter(s, self.view.scale, img.mips);
+                render::draw_image(&mut pass, pipeline, &self.globals, filter, img);
+            }
         }
+        pass.set_scissor_rect(0, 0, vw, vh);
         pass
     }
 
@@ -1453,11 +1550,13 @@ impl ViewerWindow {
     }
 }
 
-/// Restore the regions of `old` from the source, then write `new` (in order), as view pixels.
+/// Restore the regions of `old` from `base` (the source as on screen, adjusted or not), then write
+/// `new` (in order), as view pixels.
 fn write_patches(
     gpu: &Gpu,
     img: &crate::render::GpuImage,
     src: &rv_core::export::DocSource,
+    base: &rv_core::decode::Pixels,
     space: ViewSpace,
     old: &[Arc<rv_core::edit::redact::Patch>],
     new: &[Arc<rv_core::edit::redact::Patch>],
@@ -1471,7 +1570,7 @@ fn write_patches(
             ((y as usize * src.w as usize) + r.x as usize) * 4
                 ..((y as usize * src.w as usize) + (r.x + r.w) as usize) * 4
         };
-        let base: Vec<u8> = match &*src.pixels {
+        let base: Vec<u8> = match base {
             Pixels::Rgba8(v) => (r.y..r.y + r.h).flat_map(|y| v[row(y)].to_vec()).collect(),
             Pixels::Rgba16(v) => rv_core::color::rgba8(Pixels::Rgba16(
                 (r.y..r.y + r.h).flat_map(|y| v[row(y)].to_vec()).collect(),
