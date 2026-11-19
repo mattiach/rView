@@ -1,5 +1,5 @@
 //! egui dialogs. Inside a viewer window: Rename, Open URL with its download progress,
-//! Export (Markup), the non-modal File Info. In their own windows (`tool`): Settings, Welcome, update notice, Color Picker.
+//! Export (Markup), the non-modal File Info. In their own windows (`tool`): Settings, Welcome, Color Picker.
 //! A dialog never acts by itself: it returns an outcome the app runs, the same one the E2E driver
 //! gets by pressing its buttons.
 
@@ -8,7 +8,6 @@ pub mod colorpick;
 pub mod export;
 pub mod icons;
 pub mod info;
-pub mod notice;
 pub mod openurl;
 pub mod options;
 pub mod rename;

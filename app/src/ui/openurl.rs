@@ -107,7 +107,7 @@ pub fn temp_path(dir: &Path, ext: &str) -> PathBuf {
     }
 }
 
-/// HTTP client of Open URL and the update check: Windows TLS (SChannel) with the system's root
+/// HTTP client of Open URL: Windows TLS (SChannel) with the system's root
 /// certificates, the system proxy, a generic user agent.
 pub fn agent() -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};

@@ -1,6 +1,5 @@
 //! Persistent state, separate from settings: `%APPDATA%\rView\state.toml`.
-//! Window geometry, recent files and colors, firstlaunch, configversion, lastupdatecheck,
-//! shortcuts.
+//! Window geometry, recent files and colors, firstlaunch, configversion, shortcuts.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -45,9 +44,6 @@ pub struct State {
     pub first_launch: bool,
     #[serde(rename = "configversion")]
     pub config_version: u32,
-    /// Last update check, seconds since the Unix epoch (at most every 4 h).
-    #[serde(rename = "lastupdatecheck")]
-    pub last_update_check: i64,
     /// Folder the Open dialog starts in (`recents.lastFileDialogDir`).
     #[serde(rename = "lastfiledialogdir")]
     pub last_file_dialog_dir: Option<PathBuf>,
@@ -68,7 +64,6 @@ impl Default for State {
             recents: Vec::new(),
             first_launch: true,
             config_version: CONFIG_VERSION,
-            last_update_check: 0,
             last_file_dialog_dir: None,
             shortcuts: Default::default(),
             recent_colors: Vec::new(),
@@ -212,7 +207,6 @@ mod tests {
             }],
             first_launch: false,
             config_version: CONFIG_VERSION,
-            last_update_check: 1_763_000_000,
             last_file_dialog_dir: Some(PathBuf::from(r"C:\Foto")),
             shortcuts: [("nextfile".to_string(), vec!["Space".to_string()])].into(),
             recent_colors: vec![[10, 132, 255], [0, 0, 0]],

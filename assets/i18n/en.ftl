@@ -321,7 +321,6 @@ settings-afterdelete-forward = Show the next file
 settings-askdelete = Ask before moving files to the Recycle Bin
 settings-mime = Detect images by their content, not only the extension
 settings-saverecents = Remember recent files
-settings-updates = Check for updates at startup
 settings-skiphidden = Skip hidden files
 settings-markup = Markup
 settings-metadata = Metadata on export:
@@ -337,7 +336,7 @@ settings-shortcut-action = Action
 settings-shortcut-keys = Shortcuts
 settings-shortcut-conflict = Also used by: { $actions }
 
-## About, Welcome, updates
+## About, Welcome
 
 empty-version = Version { $version }
 empty-open = Right-click anywhere and choose Open... (Ctrl+O)
@@ -349,8 +348,6 @@ welcome-tips = Right-click the image for every action; Settings is in the Tools 
 welcome-default = Open images with rView by default?
 welcome-default-button = Set as default…
 welcome-default-detail = Windows asks you to confirm in Settings > Default apps.
-welcome-updates = Check for updates at startup
-welcome-updates-detail = rView asks GitHub for its latest release at most every 4 hours; nothing else is sent.
 welcome-start = Get started
 color-title = Color Picker
 color-pick = Pick from image
@@ -361,17 +358,6 @@ color-recent-empty = Colors you pick or copy appear here.
 color-copy = Copy
 color-copied = Copied
 markup-move-bar = Drag to move the toolbar
-update-title = Update available
-update-available = rView { $version } is available
-update-current = You have version { $version }.
-update-changelog = What's new:
-update-download = Download
-update-status-off = Update notifications are off.
-update-status-recent = Last checked for updates on { $when }.
-update-status-checking = Checking for updates...
-update-status-uptodate = rView is up to date.
-update-status-available = Version { $version } is available.
-update-status-failed = The update check failed: { $reason }
 
 ## Markup
 

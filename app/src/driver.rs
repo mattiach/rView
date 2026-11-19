@@ -65,8 +65,6 @@ pub struct Observation {
     pub settings: rv_core::settings::Settings,
     /// UI language in use.
     pub language: String,
-    /// Update check status line.
-    pub update_status: String,
     /// Last link the app would have opened in the browser.
     pub opened_url: Option<String>,
     pub first_launch: bool,

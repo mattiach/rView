@@ -16,7 +16,7 @@ Only the latest release gets security fixes.
 ## Scope
 
 In scope: anything a crafted input can do to rView — image files, `.rvm` projects, the clipboard, Open URL
-downloads, the update check — such as crashes, hangs, excessive memory use, writes outside the chosen file,
+downloads — such as crashes, hangs, excessive memory use, writes outside the chosen file,
 or running code; and the installer.
 
 Not vulnerabilities, by design (documented in the README):

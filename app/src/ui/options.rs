@@ -353,7 +353,6 @@ impl Options {
             check(ui, "settings-askdelete", &mut d.ask_delete);
             check(ui, "settings-mime", &mut d.allow_mime_content_detection);
             check(ui, "settings-saverecents", &mut d.save_recents);
-            check(ui, "settings-updates", &mut d.update_notifications);
             check(ui, "settings-skiphidden", &mut d.skip_hidden);
         });
         ui.add_space(10.0);

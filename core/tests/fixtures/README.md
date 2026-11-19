@@ -6,7 +6,7 @@ images, libavif, libjpeg-turbo, libheif), so the tests compare two decoders on t
 Missing files are reported as `SKIPPED: fixtures/<name> not present`.
 
 **The files are not in the repository** (`.gitignore` keeps only this README and the two
-scripts). Without them the tests print `SKIPPED` (CI does not run the tests). To get them
+scripts). Without them the tests print `SKIPPED`. To get them
 back, from this folder:
 
     python fetch_fixtures.py                      # downloads below, SHA-256 checked (standard library only)

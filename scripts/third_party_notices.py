@@ -1,6 +1,6 @@
 """Writes THIRD-PARTY-NOTICES.txt: the licences of every crate linked into rview.exe and of the
-fonts embedded in it. Run it after changing dependencies (release.ps1 does); CI runs it with
---check and fails when the committed file is out of date.
+fonts embedded in it. Run it after changing dependencies (release.ps1 does); with
+--check it only reports whether the committed file is out of date.
 
     python scripts/third_party_notices.py [--check]
 

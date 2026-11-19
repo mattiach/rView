@@ -9,7 +9,6 @@ use crate::render::Gpu;
 use crate::shortcuts::Shortcuts;
 use crate::ui::tool::{Content, ToolOut, ToolWindow};
 use crate::ui::{self, Dialog, Outcome as DialogOutcome};
-use crate::update;
 use crate::window::{Request, ViewerWindow};
 use rv_core::color::ViewSpace;
 use rv_core::folder::{self, Folder, Nav};
@@ -105,8 +104,6 @@ pub enum UserEvent {
     },
     /// Recent files found missing at start (checked on a worker).
     RecentsMissing(Vec<PathBuf>),
-    /// The update check finished.
-    UpdateChecked(Result<update::Release, String>),
     /// A frame of this window produced a dialog outcome or a Markup request (run outside the
     /// paint).
     FrameOutcome(WindowId),
@@ -214,11 +211,8 @@ pub struct App {
     locale: ui::info::Locale,
     /// Decode options for Copy (SVG raster size).
     decode_opts: rv_core::decode::DecodeOptions,
-    /// Settings, Welcome, update notice: at most one window of each kind.
+    /// Settings, Welcome, Color Picker: at most one window of each kind.
     tools: HashMap<WindowId, ToolWindow>,
-    update_status: update::Status,
-    update_url: String,
-    pending_update: bool,
     /// Last link the app opened in the browser (tests read it instead).
     opened_url: Option<String>,
 }
@@ -254,10 +248,6 @@ impl App {
         let software = cfg.software;
         let gpu_init = Some(std::thread::spawn(move || Gpu::new(software)));
         let settings_path = cfg.settings_file.clone();
-        let update_url = cfg
-            .update_url
-            .clone()
-            .unwrap_or_else(|| update::RELEASES_API.to_string());
         let settings = cfg
             .settings
             .take()
@@ -323,9 +313,6 @@ impl App {
             locale: ui::info::Locale::user(),
             decode_opts: Default::default(),
             tools: HashMap::new(),
-            update_status: update::Status::Off,
-            update_url,
-            pending_update: false,
             opened_url: None,
         }
     }
@@ -1432,15 +1419,9 @@ impl App {
                         crate::platform::open_url(&url);
                     }
                 }
-                ToolOut::Welcome { update_notifications } => {
+                ToolOut::Welcome => {
                     self.state.first_launch = false;
                     self.save_state();
-                    if update_notifications != self.settings.update_notifications {
-                        let mut s = self.settings.clone();
-                        s.update_notifications = update_notifications;
-                        self.apply_settings(s, None, true);
-                    }
-                    self.maybe_check_updates();
                 }
             }
         }
@@ -1471,48 +1452,6 @@ impl App {
         if self.driver.is_some() {
             let _ = self.proxy.send_event(UserEvent::AnimWake);
         }
-    }
-
-    /// Start the update check if it is on and due.
-    fn maybe_check_updates(&mut self) {
-        if !cfg!(feature = "update-check") || !self.settings.update_notifications {
-            self.update_status = update::Status::Off;
-            return;
-        }
-        if self.pending_update {
-            return;
-        }
-        let now = update::now_epoch();
-        if !update::due(self.state.last_update_check, now) {
-            self.update_status = update::Status::Recent(self.state.last_update_check);
-            return;
-        }
-        self.update_status = update::Status::Checking;
-        self.pending_update = true;
-        let url = self.update_url.clone();
-        self.spawn(move || UserEvent::UpdateChecked(update::fetch(&url)));
-    }
-
-    fn on_update_checked(&mut self, el: &ActiveEventLoop, result: Result<update::Release, String>) {
-        self.pending_update = false;
-        self.state.last_update_check = update::now_epoch();
-        self.save_state();
-        self.update_status = match result {
-            Ok(r) if update::newer(&r.version, env!("CARGO_PKG_VERSION")) => {
-                let notice = ui::notice::UpdateNotice {
-                    version: r.version.clone(),
-                    notes: r.notes.clone(),
-                    url: r.url.clone(),
-                };
-                self.open_tool(el, Content::Update(notice));
-                update::Status::Available(r)
-            }
-            Ok(_) => update::Status::UpToDate,
-            Err(e) => {
-                log::warn!("update check: {e}");
-                update::Status::Failed(e)
-            }
-        };
     }
 
     /// settings.toml changed outside this process (another instance, an editor): reload it when
@@ -1642,9 +1581,6 @@ impl App {
         }
         if save {
             self.save_settings();
-        }
-        if old.update_notifications != s.update_notifications {
-            self.maybe_check_updates();
         }
     }
 
@@ -2450,10 +2386,7 @@ impl App {
                 self.open_tool(el, Content::Color(c));
                 self.color_picking(id);
             }
-            Action::Welcome => {
-                let w = ui::welcome::Welcome::new(self.settings.update_notifications);
-                self.open_tool(el, Content::Welcome(w));
-            }
+            Action::Welcome => self.open_tool(el, Content::Welcome(Default::default())),
             Action::ClearRecents => {
                 self.state.recents.clear();
                 self.recents_changed();
@@ -2815,7 +2748,6 @@ impl App {
             recent_colors: self.state.recent_colors.clone(),
             settings: self.settings.clone(),
             language: i18n::current(),
-            update_status: self.update_status.text(),
             opened_url: self.opened_url.clone(),
             first_launch: self.state.first_launch,
             screen_from_image: w.map(|w| w.view.screen_from_image().m).unwrap_or_default(),
@@ -2855,7 +2787,6 @@ impl App {
                 || w.svg_pending
                 || w.svg_want.is_some()
         }) || self.tools.values().any(|t| !t.presented)
-            || self.pending_update
     }
 
     fn run_driver(&mut self, el: &ActiveEventLoop) {
@@ -3088,10 +3019,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // Welcome at the first start (only with a real state file: not in tests)
         if self.state_path.is_some() && self.state.first_launch && !self.cfg.measure_startup {
-            let w = ui::welcome::Welcome::new(self.settings.update_notifications);
-            self.open_tool(el, Content::Welcome(w));
-        } else {
-            self.maybe_check_updates();
+            self.open_tool(el, Content::Welcome(Default::default()));
         }
     }
 
@@ -3124,7 +3052,6 @@ impl ApplicationHandler<UserEvent> for App {
                     t.on_accesskit(e.window_event);
                 }
             }
-            UserEvent::UpdateChecked(r) => self.on_update_checked(el, r),
             UserEvent::RecentsMissing(paths) => {
                 if self.state.forget_recents(&paths) {
                     self.recents_changed();

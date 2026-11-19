@@ -1,7 +1,6 @@
-# Prepare a release: set the version in Cargo.toml and the installer script, build rview.exe,
-# regenerate THIRD-PARTY-NOTICES.txt and, with Inno Setup 6, build the installer locally.
-# Then commit, push, and push the tag v<Version>: .github/workflows/build.yml checks that the tag
-# matches Cargo.toml, builds rview.exe and publishes the GitHub release with the exe and the notices.
+# Build a release locally: set the version in Cargo.toml and the installer script, build rview.exe,
+# regenerate THIRD-PARTY-NOTICES.txt and, with Inno Setup 6, build the installer. Nothing is
+# published.
 #   powershell -ExecutionPolicy Bypass -File scripts\release.ps1 1.2.0
 param([Parameter(Mandatory = $true)][string]$Version)
 
@@ -36,9 +35,7 @@ try {
     } else {
         Write-Host "rView ${Version}: target\release\rview.exe (Inno Setup 6 not found, no installer)"
     }
-    Write-Host "Commit Cargo.toml, Cargo.lock, dist\win\rview.iss and THIRD-PARTY-NOTICES.txt, push, then"
-    Write-Host "  git tag v$Version; git push origin v$Version"
-    Write-Host "CI builds rview.exe and publishes the v$Version release."
+    Write-Host "Changed: Cargo.toml, Cargo.lock, dist\win\rview.iss, THIRD-PARTY-NOTICES.txt"
 } finally {
     Pop-Location
 }

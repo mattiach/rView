@@ -182,13 +182,7 @@ fn main() {
         // Welcome opens as its own window
         Step::Do(Action::Welcome),
         Step::WaitIdle,
-        check(|o| {
-            expect(
-                o.tools == ["welcome"] && o.update_status == "Update notifications are off.",
-                "welcome",
-                o,
-            )
-        }),
+        check(|o| expect(o.tools == ["welcome"], "welcome", o)),
         Step::ToolButton("welcome", "ok"),
         check(|o| expect(o.tools.is_empty() && o.language == "en", "welcome closed, English", o)),
     ];

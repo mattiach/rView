@@ -10,9 +10,9 @@ fn main() {
         .supported_os(SupportedOS::Windows10..);
     // One resource script for everything: the icon (ordinal 1: Explorer, shortcuts, taskbar,
     // title bar), the manifest and the version info.
-    println!("cargo:rerun-if-changed=../assets/icon/rview.ico");
+    let icon = icon();
     winresource::WindowsResource::new()
-        .set_icon("../assets/icon/rview.ico")
+        .set_icon(icon.to_str().expect("UTF-8 OUT_DIR"))
         .set_manifest(&manifest.to_string())
         .set("ProductName", "rView")
         .set("FileDescription", "rView")
@@ -22,6 +22,32 @@ fn main() {
         .expect("embed resources");
     println!("cargo:rerun-if-changed=build.rs");
     languages();
+}
+
+/// `assets/icon/rview.png` → `OUT_DIR/rview.ico` (16–256 px, PNG entries). A copy goes next to
+/// the exe (`target/<profile>/rview.ico`) for the installer.
+fn icon() -> std::path::PathBuf {
+    use image::codecs::ico::{IcoEncoder, IcoFrame};
+    use image::imageops::FilterType;
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/icon/rview.png");
+    println!("cargo:rerun-if-changed={}", src.display());
+    let logo = image::open(&src).expect("assets/icon/rview.png").into_rgba8();
+    let frames: Vec<_> = [16, 20, 24, 32, 40, 48, 64, 128, 256]
+        .into_iter()
+        .map(|s| {
+            let im = image::imageops::resize(&logo, s, s, FilterType::Lanczos3);
+            IcoFrame::as_png(im.as_raw(), s, s, image::ExtendedColorType::Rgba8).expect("icon frame")
+        })
+        .collect();
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let ico = out.join("rview.ico");
+    IcoEncoder::new(std::fs::File::create(&ico).unwrap())
+        .encode_images(&frames)
+        .expect("write rview.ico");
+    if let Some(exe_dir) = out.ancestors().nth(3) {
+        let _ = std::fs::copy(&ico, exe_dir.join("rview.ico"));
+    }
+    ico
 }
 
 /// UI languages: every `assets/i18n/<code>.ftl` is embedded, so adding a language is adding

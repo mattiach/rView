@@ -15,10 +15,10 @@
 ; and uncomment SignTool/SignedUninstaller below. Sign target\release\rview.exe the same way first.
 
 #define AppName "rView"
-#define AppVersion "1.4.0"
+#define AppVersion "1.5.0"
 #define AppExe "rview.exe"
-; the icon (assets\icon\rview.ico): setup, shortcuts and associated files use it
-#define IconSrc AddBackslash(SourcePath) + "..\..\assets\icon\rview.ico"
+; the icon (made from assets\icon\rview.png by the build): setup, shortcuts and associated files use it
+#define IconSrc AddBackslash(SourcePath) + "..\..\target\release\rview.ico"
 #ifexist IconSrc
   #define AppIcon "{app}\rview.ico"
 #else

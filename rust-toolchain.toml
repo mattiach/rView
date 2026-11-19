@@ -1,5 +1,5 @@
-# Pinned toolchain (rustc 1.97.1), so CI clippy/fmt results match local builds.
-# Read by rustup (CI); a standalone Rust install ignores it.
+# Pinned toolchain (rustc 1.97.1), so clippy/fmt results are the same on every machine.
+# Read by rustup; a standalone Rust install ignores it.
 [toolchain]
 channel = "1.97.1"
 components = ["clippy", "rustfmt"]

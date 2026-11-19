@@ -1,9 +1,9 @@
-//! Separate top-level windows made only of egui UI: Settings, Welcome, the update notice and
-//! the Color Picker. Each has its own surface and egui renderer on the shared GPU device.
+//! Separate top-level windows made only of egui UI: Settings, Welcome and the Color
+//! Picker. Each has its own surface and egui renderer on the shared GPU device.
 //! Their content never acts by itself: it returns `ToolOut`s that the app runs (the E2E driver
 //! presses the same buttons through `Content::press`).
 
-use super::{colorpick, notice, options, welcome};
+use super::{colorpick, options, welcome};
 use crate::render::{self, Gpu};
 use rv_core::settings::Settings;
 use std::collections::BTreeMap;
@@ -16,7 +16,6 @@ use winit::window::Window;
 pub enum Content {
     Settings(options::Options),
     Welcome(welcome::Welcome),
-    Update(notice::UpdateNotice),
     Color(colorpick::ColorPicker),
 }
 
@@ -30,10 +29,8 @@ pub enum ToolOut {
     },
     Close,
     OpenUrl(String),
-    /// Welcome closed with this choice for update notifications.
-    Welcome {
-        update_notifications: bool,
-    },
+    /// Welcome closed (it was shown: no more first launch).
+    Welcome,
     /// Color Picker: pick again from the image.
     PickColor,
     /// Color Picker: this color was used (copied): first in the history.
@@ -47,7 +44,6 @@ impl Content {
         match self {
             Content::Settings(_) => "settings",
             Content::Welcome(_) => "welcome",
-            Content::Update(_) => "update",
             Content::Color(_) => "color",
         }
     }
@@ -57,7 +53,6 @@ impl Content {
         match self {
             Content::Settings(_) => t("title-settings"),
             Content::Welcome(_) => t("welcome-title"),
-            Content::Update(_) => t("update-title"),
             Content::Color(_) => t("color-title"),
         }
     }
@@ -67,7 +62,6 @@ impl Content {
         match self {
             Content::Settings(_) => (680.0, 600.0, true),
             Content::Welcome(_) => (500.0, 420.0, false),
-            Content::Update(_) => (540.0, 440.0, true),
             Content::Color(_) => (340.0, 588.0, false),
         }
     }
@@ -76,18 +70,15 @@ impl Content {
         match self {
             Content::Settings(o) => o.ui(ui),
             Content::Welcome(w) => w.ui(ui),
-            Content::Update(u) => u.ui(ui),
             Content::Color(c) => c.ui(ui),
         }
     }
 
-    /// Press a button by name, as a click would ("ok", "apply", "cancel", "defaults", "close",
-    /// "download").
+    /// Press a button by name, as a click would ("ok", "apply", "cancel", "defaults", "close").
     pub fn press(&mut self, button: &str) -> Vec<ToolOut> {
         match self {
             Content::Settings(o) => o.press(button),
             Content::Welcome(w) => w.press(button),
-            Content::Update(u) => u.press(button),
             Content::Color(c) => c.press(button),
         }
     }

@@ -251,8 +251,6 @@ pub struct Settings {
     /// Keep the Open Recent list.
     #[serde(rename = "saverecents")]
     pub save_recents: bool,
-    #[serde(rename = "updatenotifications")]
-    pub update_notifications: bool,
     #[serde(rename = "skiphidden")]
     pub skip_hidden: bool,
     pub markup: MarkupSettings,
@@ -290,7 +288,6 @@ impl Default for Settings {
             ask_delete: true,
             allow_mime_content_detection: false,
             save_recents: true,
-            update_notifications: false,
             skip_hidden: true,
             markup: MarkupSettings::default(),
         }

@@ -1,31 +1,25 @@
-//! Welcome window at the first start: the choice about update notifications, and the offer to
-//! make rView the default app for images.
+//! Welcome window at the first start: the offer to make rView the default app for images.
 
 use super::tool::ToolOut;
 use crate::i18n::t;
 
 pub struct Welcome {
-    pub update_notifications: bool,
     /// Windows Settings page for rView's default apps; `None` when rView isn't installed.
     default_apps: Option<String>,
 }
 
-impl Welcome {
-    pub fn new(update_notifications: bool) -> Self {
+impl Default for Welcome {
+    fn default() -> Self {
         Self {
-            update_notifications,
             default_apps: crate::platform::default_apps_page(),
         }
     }
+}
 
-    /// Any way of closing it records the choice (and that the welcome was shown).
+impl Welcome {
+    /// Any way of closing it records that the welcome was shown.
     pub fn press(&mut self, _button: &str) -> Vec<ToolOut> {
-        vec![
-            ToolOut::Welcome {
-                update_notifications: self.update_notifications,
-            },
-            ToolOut::Close,
-        ]
+        vec![ToolOut::Welcome, ToolOut::Close]
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) -> Vec<ToolOut> {
@@ -48,9 +42,6 @@ impl Welcome {
             });
             ui.label(egui::RichText::new(t("welcome-default-detail")).weak().small());
         }
-        ui.add_space(12.0);
-        ui.checkbox(&mut self.update_notifications, t("welcome-updates"));
-        ui.label(egui::RichText::new(t("welcome-updates-detail")).weak().small());
         ui.add_space(12.0);
         ui.vertical_centered(|ui| {
             if ui.button(t("welcome-start")).clicked() {

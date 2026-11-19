@@ -9,8 +9,7 @@ files, compared with an independent decoder). Results below are from Windows 11 
     python core/tests/fixtures/fetch_fixtures.py     # third-party fixtures (see its README)
     cargo test -p rv-core --test fixtures -- --nocapture
 
-Each check prints a `CAPABILITY` or `SKIPPED` line. CI does not run these tests (it only builds and
-audits dependencies); run them locally.
+Each check prints a `CAPABILITY` or `SKIPPED` line.
 
 ## Libraries and codecs
 

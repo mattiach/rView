@@ -14,7 +14,6 @@ pub mod platform;
 pub mod render;
 pub mod shortcuts;
 pub mod ui;
-pub mod update;
 pub mod viewer;
 mod window;
 
@@ -40,8 +39,6 @@ pub struct Config {
     /// Tests: answer every confirmation (Delete, Delete Permanently) with this instead of asking;
     /// with a driver, messages for the user are recorded (`Observation::message`), not shown.
     pub auto_confirm: Option<bool>,
-    /// Tests: where the update check reads the latest release (default: the GitHub API).
-    pub update_url: Option<String>,
     /// Tests: keep the windows on screen while a driver runs (they are cloaked otherwise). UI
     /// Automation leaves cloaked windows, and the dialogs and menus they own, out of its tree.
     pub visible: bool,
