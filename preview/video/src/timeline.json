@@ -1,0 +1,16 @@
+{
+  "bpm": 120,
+  "bars": {
+    "opening": 4,
+    "logo": 4,
+    "speed": 4,
+    "viewer": 4,
+    "formats": 4,
+    "markup": 2,
+    "adjust": 2,
+    "crop": 2,
+    "info": 2,
+    "free": 4,
+    "closing": 4
+  }
+}

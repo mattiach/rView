@@ -33,3 +33,5 @@ Promotional images of rView, rebuilt from screenshots whenever the interface cha
    maximised window has wide empty margins.
 
 Text is in each page; headings and shortcuts must match the app (`app/src/actions.rs`).
+
+The promotional video in `video/` uses the same screenshots; see [video/README.md](video/README.md).
